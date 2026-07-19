@@ -1,6 +1,10 @@
 from enum import StrEnum
 
 
+def enum_values(enum_class: type[StrEnum]) -> list[str]:
+    return [item.value for item in enum_class]
+
+
 class UserRole(StrEnum):
     ADMIN = "admin"
     STUDENT = "student"
@@ -17,6 +21,28 @@ class BatchSlot(StrEnum):
     MORNING = "morning"
     NOON = "noon"
     AFTERNOON = "afternoon"
+
+
+class DayOfWeek(StrEnum):
+    MONDAY = "monday"
+    TUESDAY = "tuesday"
+    WEDNESDAY = "wednesday"
+    THURSDAY = "thursday"
+    FRIDAY = "friday"
+    SATURDAY = "saturday"
+    SUNDAY = "sunday"
+
+
+class AvailabilitySlotSource(StrEnum):
+    RULE = "rule"
+    MANUAL = "manual"
+
+
+class AvailabilitySlotStatus(StrEnum):
+    AVAILABLE = "available"
+    BOOKED = "booked"
+    CANCELLED = "cancelled"
+    BLOCKED = "blocked"
 
 
 class ClassSessionStatus(StrEnum):

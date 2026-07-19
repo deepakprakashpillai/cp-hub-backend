@@ -2,11 +2,7 @@ from sqlalchemy import Boolean, Enum, String, true
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
-from app.shared.enums import UserRole
-
-
-def enum_values(enum_class: type[UserRole]) -> list[str]:
-    return [item.value for item in enum_class]
+from app.shared.enums import UserRole, enum_values
 
 
 class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
