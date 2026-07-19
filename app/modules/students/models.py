@@ -52,3 +52,39 @@ class Student(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=False,
     )
     notes: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+
+class StudentProgramChange(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "student_program_changes"
+
+    student_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("students.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    old_program_type: Mapped[StudentProgramType] = mapped_column(
+        Enum(
+            StudentProgramType,
+            name="student_program_type",
+            values_callable=enum_values,
+            validate_strings=True,
+        ),
+        nullable=False,
+    )
+    new_program_type: Mapped[StudentProgramType] = mapped_column(
+        Enum(
+            StudentProgramType,
+            name="student_program_type",
+            values_callable=enum_values,
+            validate_strings=True,
+        ),
+        nullable=False,
+    )
+    changed_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+    reason: Mapped[str | None] = mapped_column(String(1000), nullable=True)

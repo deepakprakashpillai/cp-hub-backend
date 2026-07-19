@@ -4,8 +4,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
-from app.modules.students.models import Student
-from app.modules.students.schemas import StudentCreate, StudentUpdate
+from app.modules.students.models import Student, StudentProgramChange
+from app.modules.students.schemas import StudentCreate, StudentProgramSwitch, StudentUpdate
 from app.modules.users.models import User
 from app.shared.enums import StudentStatus, UserRole
 
@@ -80,6 +80,45 @@ class StudentService:
         await self.session.commit()
         await self.session.refresh(student)
         return student
+
+    async def switch_program(
+        self,
+        student_id: UUID,
+        switch_in: StudentProgramSwitch,
+    ) -> StudentProgramChange:
+        student = await self.get_student(student_id)
+        if student.program_type == switch_in.new_program_type:
+            raise BadRequestError("Student is already in this program")
+
+        if switch_in.changed_by_user_id is not None:
+            user = await self.session.get(User, switch_in.changed_by_user_id)
+            if user is None:
+                raise NotFoundError("User not found")
+
+        change = StudentProgramChange(
+            student_id=student.id,
+            old_program_type=student.program_type,
+            new_program_type=switch_in.new_program_type,
+            changed_by_user_id=switch_in.changed_by_user_id,
+            reason=switch_in.reason,
+        )
+        student.program_type = switch_in.new_program_type
+
+        self.session.add(change)
+        await self.session.commit()
+        await self.session.refresh(change)
+        return change
+
+    async def list_program_changes(
+        self,
+        student_id: UUID | None = None,
+    ) -> list[StudentProgramChange]:
+        query = select(StudentProgramChange).order_by(StudentProgramChange.created_at.desc())
+        if student_id is not None:
+            query = query.where(StudentProgramChange.student_id == student_id)
+
+        result = await self.session.scalars(query)
+        return list(result)
 
     def _validate_active_access_window(
         self,

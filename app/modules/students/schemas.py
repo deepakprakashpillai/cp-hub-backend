@@ -70,3 +70,22 @@ class StudentRead(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class StudentProgramSwitch(BaseModel):
+    new_program_type: StudentProgramType
+    changed_by_user_id: UUID | None = None
+    reason: str | None = Field(default=None, max_length=1000)
+
+
+class StudentProgramChangeRead(BaseModel):
+    id: UUID
+    student_id: UUID
+    old_program_type: StudentProgramType
+    new_program_type: StudentProgramType
+    changed_by_user_id: UUID | None
+    reason: str | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
