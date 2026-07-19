@@ -32,6 +32,12 @@ class PaymentMethod(StrEnum):
     OTHER = "other"
 
 
+class StudentAccessGrantType(StrEnum):
+    PACKAGE = "package"
+    ADDON_DAYS = "addon_days"
+    MANUAL_ADJUSTMENT = "manual_adjustment"
+
+
 class BatchSlot(StrEnum):
     MORNING = "morning"
     NOON = "noon"
