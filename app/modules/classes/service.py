@@ -1,0 +1,2 @@
+class ClassSessionService:
+    pass

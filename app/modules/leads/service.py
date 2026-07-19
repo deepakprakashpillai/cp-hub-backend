@@ -1,0 +1,2 @@
+class LeadService:
+    pass
