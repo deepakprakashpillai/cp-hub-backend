@@ -25,6 +25,13 @@ class StudentStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class PaymentMethod(StrEnum):
+    UPI = "upi"
+    CASH = "cash"
+    BANK_TRANSFER = "bank_transfer"
+    OTHER = "other"
+
+
 class BatchSlot(StrEnum):
     MORNING = "morning"
     NOON = "noon"

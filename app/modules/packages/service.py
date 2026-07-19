@@ -49,3 +49,10 @@ class PackageService:
         await self.session.commit()
         await self.session.refresh(package)
         return package
+
+    async def void_package(self, package_id: UUID) -> Package:
+        package = await self.get_package(package_id)
+        package.is_active = False
+        await self.session.commit()
+        await self.session.refresh(package)
+        return package

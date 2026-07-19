@@ -37,3 +37,11 @@ async def update_package(
     session: DBSession,
 ) -> PackageRead:
     return await PackageService(session).update_package(package_id, package_in)
+
+
+@router.post("/{package_id}/void", response_model=PackageRead)
+async def void_package(
+    package_id: UUID,
+    session: DBSession,
+) -> PackageRead:
+    return await PackageService(session).void_package(package_id)

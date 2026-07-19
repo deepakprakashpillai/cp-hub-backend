@@ -3,6 +3,7 @@ from app.modules.classes.models import ClassSession
 from app.modules.leads.models import Lead
 from app.modules.packages.models import Package
 from app.modules.schedules.models import TeacherAvailabilityRule, TeacherAvailabilitySlot
+from app.modules.student_payments.models import StudentPayment
 from app.modules.students.models import Student
 from app.modules.teachers.models import Teacher
 from app.modules.users.models import User
@@ -13,6 +14,7 @@ __all__ = [
     "Lead",
     "Package",
     "Student",
+    "StudentPayment",
     "Teacher",
     "TeacherAvailabilityRule",
     "TeacherAvailabilitySlot",
