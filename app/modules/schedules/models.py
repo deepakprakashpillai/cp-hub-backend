@@ -1,7 +1,7 @@
 from datetime import datetime, time
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, Time, Uuid, true
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, Time, Uuid, text, true
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -39,6 +39,16 @@ class TeacherAvailabilityRule(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
 class TeacherAvailabilitySlot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "teacher_availability_slots"
+    __table_args__ = (
+        Index(
+            "uq_active_teacher_availability_slot_time",
+            "teacher_id",
+            "starts_at",
+            "ends_at",
+            unique=True,
+            postgresql_where=text("status <> 'cancelled'"),
+        ),
+    )
 
     teacher_id: Mapped[UUID] = mapped_column(
         Uuid,

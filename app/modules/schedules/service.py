@@ -13,6 +13,7 @@ from app.modules.schedules.schemas import (
     TeacherAvailabilitySlotCreate,
     TeacherAvailabilitySlotUpdate,
 )
+from app.modules.schedules.slot_generation import sync_teacher_availability_slots
 from app.modules.teachers.models import Teacher
 from app.shared.enums import AvailabilitySlotSource, AvailabilitySlotStatus
 from app.shared.utils import utc_now
@@ -51,6 +52,8 @@ class ScheduleService:
         self.session.add(rule)
         await self.session.commit()
         await self.session.refresh(rule)
+        await sync_teacher_availability_slots(self.session, rule_id=rule.id)
+        await self.session.refresh(rule)
         return rule
 
     async def update_teacher_availability_rule(
@@ -70,16 +73,17 @@ class ScheduleService:
         if rule.start_time_utc >= rule.end_time_utc:
             raise ConflictError("start_time_utc must be before end_time_utc")
 
-        await self._cancel_future_available_rule_slots(rule.id)
         await self.session.commit()
+        await self.session.refresh(rule)
+        await sync_teacher_availability_slots(self.session, rule_id=rule.id)
         await self.session.refresh(rule)
         return rule
 
     async def delete_teacher_availability_rule(self, rule_id: UUID) -> None:
         rule = await self.get_teacher_availability_rule(rule_id)
         rule.is_active = False
-        await self._cancel_future_available_rule_slots(rule.id)
         await self.session.commit()
+        await sync_teacher_availability_slots(self.session, rule_id=rule.id)
 
     async def list_teacher_availability_slots(
         self,

@@ -18,3 +18,4 @@ build/
 *.egg-info/
 alembic/versions/*.pyc
 postgres_data/
+docs/
