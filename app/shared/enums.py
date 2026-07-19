@@ -17,6 +17,14 @@ class StudentProgramType(StrEnum):
     BATCH = "batch"
 
 
+class StudentStatus(StrEnum):
+    ENROLLED = "enrolled"
+    ACTIVE = "active"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
 class BatchSlot(StrEnum):
     MORNING = "morning"
     NOON = "noon"
