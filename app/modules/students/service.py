@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
+from app.modules.bookings.service import BookingService
 from app.modules.students.models import Student, StudentProgramChange
 from app.modules.students.schemas import StudentCreate, StudentProgramSwitch, StudentUpdate
 from app.modules.users.models import User
@@ -105,6 +106,10 @@ class StudentService:
         student.program_type = switch_in.new_program_type
 
         self.session.add(change)
+        await BookingService(self.session).cancel_future_bookings_for_student(
+            student_id=student.id,
+            commit=False,
+        )
         await self.session.commit()
         await self.session.refresh(change)
         return change
