@@ -3,6 +3,8 @@ from uuid import UUID
 from fastapi import APIRouter, status
 
 from app.api.deps import DBSession
+from app.modules.batch_groups.schemas import StudentBatchMembershipRead, StudentBatchTransfer
+from app.modules.batch_groups.service import BatchGroupService
 from app.modules.students.schemas import (
     StudentCreate,
     StudentProgramChangeRead,
@@ -60,3 +62,20 @@ async def switch_student_program(
     session: DBSession,
 ) -> StudentProgramChangeRead:
     return await StudentService(session).switch_program(student_id, switch_in)
+
+
+@router.post("/{student_id}/batch-transfer", response_model=StudentBatchMembershipRead)
+async def transfer_student_batch_group(
+    student_id: UUID,
+    transfer_in: StudentBatchTransfer,
+    session: DBSession,
+) -> StudentBatchMembershipRead:
+    return await BatchGroupService(session).transfer_student_batch_group(student_id, transfer_in)
+
+
+@router.get("/{student_id}/batch-memberships", response_model=list[StudentBatchMembershipRead])
+async def list_student_batch_memberships(
+    student_id: UUID,
+    session: DBSession,
+) -> list[StudentBatchMembershipRead]:
+    return await BatchGroupService(session).list_student_batch_memberships(student_id)

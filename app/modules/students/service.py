@@ -4,11 +4,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
+from app.modules.batch_groups.service import BatchGroupService
 from app.modules.bookings.service import BookingService
 from app.modules.students.models import Student, StudentProgramChange
 from app.modules.students.schemas import StudentCreate, StudentProgramSwitch, StudentUpdate
 from app.modules.users.models import User
-from app.shared.enums import StudentStatus, UserRole
+from app.shared.enums import StudentProgramType, StudentStatus, UserRole
 
 
 class StudentService:
@@ -110,6 +111,12 @@ class StudentService:
             student_id=student.id,
             commit=False,
         )
+        if switch_in.new_program_type == StudentProgramType.ONE_ON_ONE:
+            await BatchGroupService(self.session).end_active_student_membership(
+                student_id=student.id,
+                reason=switch_in.reason,
+                commit=False,
+            )
         await self.session.commit()
         await self.session.refresh(change)
         return change

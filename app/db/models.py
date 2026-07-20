@@ -1,3 +1,4 @@
+from app.modules.batch_groups.models import BatchGroup, StudentBatchMembership
 from app.modules.bookings.models import Booking
 from app.modules.classes.models import ClassSession
 from app.modules.leads.models import Lead
@@ -11,11 +12,13 @@ from app.modules.users.models import User
 
 __all__ = [
     "Booking",
+    "BatchGroup",
     "ClassSession",
     "Lead",
     "Package",
     "Student",
     "StudentAccessGrant",
+    "StudentBatchMembership",
     "StudentPayment",
     "StudentProgramChange",
     "Teacher",

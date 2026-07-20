@@ -4,11 +4,12 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import ConflictError, NotFoundError
+from app.modules.batch_groups.models import BatchGroup
 from app.modules.classes.models import ClassSession
 from app.modules.classes.schemas import BatchClassSessionCreate
 from app.modules.teachers.models import Teacher
-from app.shared.enums import StudentProgramType
+from app.shared.enums import ClassSessionStatus, StudentProgramType
 
 
 class ClassSessionService:
@@ -42,14 +43,27 @@ class ClassSessionService:
         self,
         class_session_in: BatchClassSessionCreate,
     ) -> ClassSession:
+        batch_group = await self.session.get(BatchGroup, class_session_in.batch_group_id)
+        if batch_group is None:
+            raise NotFoundError("Batch group not found")
+        if not batch_group.is_active:
+            raise ConflictError("Cannot create sessions for an inactive batch group")
+
         if class_session_in.teacher_id is not None:
             teacher = await self.session.get(Teacher, class_session_in.teacher_id)
             if teacher is None:
                 raise NotFoundError("Teacher not found")
 
+        await self._ensure_no_batch_session_overlap(
+            batch_group_id=batch_group.id,
+            starts_at=class_session_in.starts_at,
+            ends_at=class_session_in.ends_at,
+        )
+
         class_session = ClassSession(
             teacher_id=class_session_in.teacher_id,
             teacher_availability_slot_id=None,
+            batch_group_id=batch_group.id,
             program_type=StudentProgramType.BATCH,
             batch_slot=class_session_in.batch_slot,
             starts_at=class_session_in.starts_at,
@@ -61,3 +75,21 @@ class ClassSessionService:
         await self.session.commit()
         await self.session.refresh(class_session)
         return class_session
+
+    async def _ensure_no_batch_session_overlap(
+        self,
+        *,
+        batch_group_id: UUID,
+        starts_at: datetime,
+        ends_at: datetime,
+    ) -> None:
+        overlapping_session = await self.session.scalar(
+            select(ClassSession).where(
+                ClassSession.batch_group_id == batch_group_id,
+                ClassSession.status != ClassSessionStatus.CANCELLED,
+                ClassSession.starts_at < ends_at,
+                ClassSession.ends_at > starts_at,
+            )
+        )
+        if overlapping_session is not None:
+            raise ConflictError("Batch group already has an overlapping class session")

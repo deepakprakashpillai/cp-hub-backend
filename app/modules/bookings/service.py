@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
+from app.modules.batch_groups.models import StudentBatchMembership
 from app.modules.bookings.models import Booking
 from app.modules.bookings.schemas import BatchBookingCreate, OneOnOneBookingCreate
 from app.modules.classes.models import ClassSession
@@ -107,6 +108,13 @@ class BookingService:
         class_session = await self._get_class_session_for_update(booking_in.class_session_id)
         if class_session.program_type != StudentProgramType.BATCH:
             raise ConflictError("Class session is not a batch session")
+        if class_session.batch_group_id is None:
+            raise ConflictError("Batch class session is missing batch group")
+        active_membership = await self._get_active_student_batch_membership(student.id)
+        if active_membership is None:
+            raise ConflictError("Student does not have an active batch membership")
+        if active_membership.batch_group_id != class_session.batch_group_id:
+            raise ConflictError("Student is not assigned to this batch group")
         if class_session.status != ClassSessionStatus.SCHEDULED:
             raise ConflictError("Class session is not scheduled")
         if class_session.starts_at <= now:
@@ -195,6 +203,17 @@ class BookingService:
         if class_session is None:
             raise NotFoundError("Class session not found")
         return class_session
+
+    async def _get_active_student_batch_membership(
+        self,
+        student_id: UUID,
+    ) -> StudentBatchMembership | None:
+        return await self.session.scalar(
+            select(StudentBatchMembership).where(
+                StudentBatchMembership.student_id == student_id,
+                StudentBatchMembership.is_active.is_(True),
+            )
+        )
 
     def _ensure_student_can_book(
         self,

@@ -19,6 +19,7 @@ class ClassSession(UUIDPrimaryKeyMixin, TimestampMixin, Base):
                 program_type = 'one_on_one'
                 and teacher_id is not null
                 and teacher_availability_slot_id is not null
+                and batch_group_id is null
                 and batch_slot is null
                 and capacity = 1
             )
@@ -26,6 +27,7 @@ class ClassSession(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             (
                 program_type = 'batch'
                 and teacher_availability_slot_id is null
+                and batch_group_id is not null
                 and batch_slot is not null
             )
             """,
@@ -50,6 +52,12 @@ class ClassSession(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     teacher_availability_slot_id: Mapped[UUID | None] = mapped_column(
         Uuid,
         ForeignKey("teacher_availability_slots.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+    batch_group_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("batch_groups.id", ondelete="CASCADE"),
         index=True,
         nullable=True,
     )

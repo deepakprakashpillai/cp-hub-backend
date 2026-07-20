@@ -13,6 +13,7 @@ def normalize_utc_datetime(value: datetime) -> datetime:
 
 
 class BatchClassSessionCreate(BaseModel):
+    batch_group_id: UUID
     teacher_id: UUID | None = None
     batch_slot: BatchSlot
     starts_at: datetime
@@ -33,6 +34,7 @@ class ClassSessionRead(BaseModel):
     id: UUID
     teacher_id: UUID | None
     teacher_availability_slot_id: UUID | None
+    batch_group_id: UUID | None
     program_type: StudentProgramType
     batch_slot: BatchSlot | None
     starts_at: datetime
