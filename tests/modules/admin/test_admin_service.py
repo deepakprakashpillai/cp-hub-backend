@@ -5,15 +5,47 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from app.modules.admin.schemas import AdminStudentCreate, AdminTeacherCreate
+from app.modules.admin.schemas import (
+    AdminStudentAccessGrantCreate,
+    AdminStudentBatchGroupSet,
+    AdminStudentCreate,
+    AdminStudentPaymentCreate,
+    AdminTeacherCreate,
+)
 from app.modules.admin.service import AdminService
+from app.modules.batch_groups.schemas import BatchSessionBulkGenerate, StudentBatchTransfer
+from app.modules.batch_groups.service import BatchGroupService
+from app.modules.bookings.schemas import (
+    AdminAddStudentToClass,
+    BatchBookingReschedule,
+    BookingActionRequest,
+    ClassAttendanceMark,
+    ClassAttendanceRecord,
+    OneOnOneBookingReschedule,
+)
+from app.modules.bookings.service import BookingService
+from app.modules.classes.schemas import BatchClassSessionCreate
+from app.modules.classes.service import ClassSessionService
+from app.modules.student_access_grants.service import StudentAccessGrantService
+from app.modules.student_payments.service import StudentPaymentService
 from app.modules.students.models import Student
+from app.modules.students.schemas import StudentProgramSwitch
 from app.modules.students.service import StudentService
 from app.modules.teachers.models import Teacher
 from app.modules.teachers.service import TeacherService
 from app.modules.users.models import User
 from app.modules.users.service import UserService
-from app.shared.enums import StudentProgramType, StudentStatus, UserRole
+from app.shared.enums import (
+    BatchSlot,
+    BookingStatus,
+    ClassSessionStatus,
+    DayOfWeek,
+    PaymentMethod,
+    StudentAccessGrantType,
+    StudentProgramType,
+    StudentStatus,
+    UserRole,
+)
 
 
 class FakeSession:
@@ -45,6 +77,28 @@ def test_admin_student_create_rejects_naive_access_datetime() -> None:
             program_type=StudentProgramType.BATCH,
             access_starts_at=datetime(2026, 7, 20),
         )
+
+
+def test_admin_student_payment_create_normalizes_paid_at_to_utc() -> None:
+    payment = AdminStudentPaymentCreate(
+        amount_paid=50000,
+        payment_method=PaymentMethod.UPI,
+        paid_at=datetime.fromisoformat("2026-07-20T10:00:00+05:30"),
+    )
+
+    assert payment.currency == "INR"
+    assert payment.paid_at == datetime(2026, 7, 20, 4, 30, tzinfo=UTC)
+
+
+def test_admin_student_access_grant_create_normalizes_start_to_utc() -> None:
+    grant = AdminStudentAccessGrantCreate(
+        grant_type=StudentAccessGrantType.ADDON_DAYS,
+        duration_days=7,
+        access_starts_at=datetime.fromisoformat("2026-07-20T00:00:00+05:30"),
+    )
+
+    assert grant.extend_current_access is True
+    assert grant.access_starts_at == datetime(2026, 7, 19, 18, 30, tzinfo=UTC)
 
 
 @pytest.mark.asyncio
@@ -98,6 +152,351 @@ async def test_admin_teacher_create_commits_once_after_user_and_teacher(
     }
     session.commit.assert_awaited_once()
     assert session.refresh.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_admin_student_payment_uses_path_student_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    student_id = uuid4()
+    payment = object()
+    calls = {}
+
+    async def fake_create_payment(self, payment_in):
+        calls["student_id"] = payment_in.student_id
+        calls["amount_paid"] = payment_in.amount_paid
+        calls["payment_method"] = payment_in.payment_method
+        return payment
+
+    monkeypatch.setattr(StudentPaymentService, "create_payment", fake_create_payment)
+
+    created_payment = await AdminService(session).create_student_payment(
+        student_id,
+        AdminStudentPaymentCreate(
+            amount_paid=50000,
+            payment_method=PaymentMethod.UPI,
+        ),
+    )
+
+    assert created_payment is payment
+    assert calls == {
+        "student_id": student_id,
+        "amount_paid": 50000,
+        "payment_method": PaymentMethod.UPI,
+    }
+
+
+@pytest.mark.asyncio
+async def test_admin_student_access_grant_uses_path_student_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    student_id = uuid4()
+    grant = object()
+    calls = {}
+
+    async def fake_create_grant(self, grant_in):
+        calls["student_id"] = grant_in.student_id
+        calls["grant_type"] = grant_in.grant_type
+        calls["duration_days"] = grant_in.duration_days
+        return grant
+
+    monkeypatch.setattr(StudentAccessGrantService, "create_grant", fake_create_grant)
+
+    created_grant = await AdminService(session).create_student_access_grant(
+        student_id,
+        AdminStudentAccessGrantCreate(
+            grant_type=StudentAccessGrantType.ADDON_DAYS,
+            duration_days=7,
+        ),
+    )
+
+    assert created_grant is grant
+    assert calls == {
+        "student_id": student_id,
+        "grant_type": StudentAccessGrantType.ADDON_DAYS,
+        "duration_days": 7,
+    }
+
+
+@pytest.mark.asyncio
+async def test_admin_student_batch_group_uses_transfer_logic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    student_id = uuid4()
+    batch_group_id = uuid4()
+    actor_user_id = uuid4()
+    membership = object()
+    calls = {}
+
+    async def fake_transfer_student_batch_group(self, received_student_id, transfer_in):
+        calls["student_id"] = received_student_id
+        calls["transfer_in"] = transfer_in
+        return membership
+
+    monkeypatch.setattr(
+        BatchGroupService,
+        "transfer_student_batch_group",
+        fake_transfer_student_batch_group,
+    )
+
+    created_membership = await AdminService(session).set_student_batch_group(
+        student_id,
+        AdminStudentBatchGroupSet(
+            batch_group_id=batch_group_id,
+            assigned_by_user_id=actor_user_id,
+            reason="set from admin portal",
+        ),
+    )
+
+    assert created_membership is membership
+    assert calls["student_id"] == student_id
+    assert calls["transfer_in"] == StudentBatchTransfer(
+        batch_group_id=batch_group_id,
+        assigned_by_user_id=actor_user_id,
+        reason="set from admin portal",
+    )
+
+
+@pytest.mark.asyncio
+async def test_admin_student_program_switch_delegates_to_student_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    student_id = uuid4()
+    program_change = object()
+    calls = {}
+
+    async def fake_switch_program(self, received_student_id, switch_in):
+        calls["student_id"] = received_student_id
+        calls["switch_in"] = switch_in
+        return program_change
+
+    monkeypatch.setattr(StudentService, "switch_program", fake_switch_program)
+
+    switch_in = StudentProgramSwitch(new_program_type=StudentProgramType.ONE_ON_ONE)
+    created_change = await AdminService(session).switch_student_program(student_id, switch_in)
+
+    assert created_change is program_change
+    assert calls == {
+        "student_id": student_id,
+        "switch_in": switch_in,
+    }
+
+
+@pytest.mark.asyncio
+async def test_admin_batch_session_generation_delegates_to_batch_group_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    batch_group_id = uuid4()
+    class_sessions = [object(), object()]
+    calls = {}
+
+    async def fake_generate_batch_sessions(self, received_batch_group_id, generation_in):
+        calls["batch_group_id"] = received_batch_group_id
+        calls["generation_in"] = generation_in
+        return class_sessions
+
+    monkeypatch.setattr(BatchGroupService, "generate_batch_sessions", fake_generate_batch_sessions)
+
+    generation_in = BatchSessionBulkGenerate(
+        starts_from=datetime(2026, 7, 20, tzinfo=UTC).date(),
+        starts_to=datetime(2026, 7, 21, tzinfo=UTC).date(),
+        weekdays=[DayOfWeek.MONDAY],
+        sessions=[
+            {
+                "batch_slot": BatchSlot.MORNING,
+                "start_time_utc": "09:00:00",
+                "end_time_utc": "10:00:00",
+            }
+        ],
+    )
+    result = await AdminService(session).generate_batch_sessions(batch_group_id, generation_in)
+
+    assert result is class_sessions
+    assert calls == {
+        "batch_group_id": batch_group_id,
+        "generation_in": generation_in,
+    }
+
+
+@pytest.mark.asyncio
+async def test_admin_create_batch_class_delegates_to_class_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    class_session = object()
+    calls = {}
+
+    async def fake_create_batch_class_session(self, class_session_in):
+        calls["class_session_in"] = class_session_in
+        return class_session
+
+    monkeypatch.setattr(
+        ClassSessionService,
+        "create_batch_class_session",
+        fake_create_batch_class_session,
+    )
+
+    class_session_in = BatchClassSessionCreate(
+        batch_group_id=uuid4(),
+        batch_slot=BatchSlot.NOON,
+        starts_at=datetime(2026, 7, 20, 10, 0, tzinfo=UTC),
+        ends_at=datetime(2026, 7, 20, 11, 0, tzinfo=UTC),
+        status=ClassSessionStatus.SCHEDULED,
+        capacity=12,
+    )
+    result = await AdminService(session).create_batch_class_session(class_session_in)
+
+    assert result is class_session
+    assert calls == {"class_session_in": class_session_in}
+
+
+@pytest.mark.asyncio
+async def test_admin_add_student_to_class_delegates_to_admin_booking_method(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    class_session_id = uuid4()
+    booking = object()
+    calls = {}
+
+    async def fake_admin_add_student_to_class(self, received_class_session_id, add_in):
+        calls["class_session_id"] = received_class_session_id
+        calls["add_in"] = add_in
+        return booking
+
+    monkeypatch.setattr(
+        BookingService,
+        "admin_add_student_to_class",
+        fake_admin_add_student_to_class,
+    )
+
+    add_in = AdminAddStudentToClass(student_id=uuid4(), reason="admin added")
+    result = await AdminService(session).add_student_to_class(class_session_id, add_in)
+
+    assert result is booking
+    assert calls == {
+        "class_session_id": class_session_id,
+        "add_in": add_in,
+    }
+
+
+@pytest.mark.asyncio
+async def test_admin_class_attendance_delegates_to_booking_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    class_session_id = uuid4()
+    bookings = [object()]
+    calls = {}
+
+    async def fake_mark_class_attendance(self, received_class_session_id, attendance_in):
+        calls["class_session_id"] = received_class_session_id
+        calls["attendance_in"] = attendance_in
+        return bookings
+
+    monkeypatch.setattr(BookingService, "mark_class_attendance", fake_mark_class_attendance)
+
+    attendance_in = ClassAttendanceMark(
+        records=[ClassAttendanceRecord(booking_id=uuid4(), status=BookingStatus.ATTENDED)]
+    )
+    result = await AdminService(session).mark_class_attendance(class_session_id, attendance_in)
+
+    assert result is bookings
+    assert calls == {
+        "class_session_id": class_session_id,
+        "attendance_in": attendance_in,
+    }
+
+
+@pytest.mark.asyncio
+async def test_admin_booking_cancel_delegates_to_admin_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    booking_id = uuid4()
+    booking = object()
+    calls = {}
+
+    async def fake_admin_cancel_booking(self, received_booking_id, cancel_in):
+        calls["booking_id"] = received_booking_id
+        calls["cancel_in"] = cancel_in
+        return booking
+
+    monkeypatch.setattr(BookingService, "admin_cancel_booking", fake_admin_cancel_booking)
+
+    cancel_in = BookingActionRequest(reason="admin cancellation")
+    result = await AdminService(session).cancel_booking(booking_id, cancel_in)
+
+    assert result is booking
+    assert calls == {
+        "booking_id": booking_id,
+        "cancel_in": cancel_in,
+    }
+
+
+@pytest.mark.asyncio
+async def test_admin_one_on_one_reschedule_delegates_to_admin_reschedule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    booking_id = uuid4()
+    booking = object()
+    calls = {}
+
+    async def fake_admin_reschedule_one_on_one_booking(self, received_booking_id, reschedule_in):
+        calls["booking_id"] = received_booking_id
+        calls["reschedule_in"] = reschedule_in
+        return booking
+
+    monkeypatch.setattr(
+        BookingService,
+        "admin_reschedule_one_on_one_booking",
+        fake_admin_reschedule_one_on_one_booking,
+    )
+
+    reschedule_in = OneOnOneBookingReschedule(teacher_availability_slot_id=uuid4())
+    result = await AdminService(session).reschedule_one_on_one_booking(booking_id, reschedule_in)
+
+    assert result is booking
+    assert calls == {
+        "booking_id": booking_id,
+        "reschedule_in": reschedule_in,
+    }
+
+
+@pytest.mark.asyncio
+async def test_admin_batch_reschedule_delegates_to_admin_reschedule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    booking_id = uuid4()
+    booking = object()
+    calls = {}
+
+    async def fake_admin_reschedule_batch_booking(self, received_booking_id, reschedule_in):
+        calls["booking_id"] = received_booking_id
+        calls["reschedule_in"] = reschedule_in
+        return booking
+
+    monkeypatch.setattr(
+        BookingService,
+        "admin_reschedule_batch_booking",
+        fake_admin_reschedule_batch_booking,
+    )
+
+    reschedule_in = BatchBookingReschedule(class_session_id=uuid4())
+    result = await AdminService(session).reschedule_batch_booking(booking_id, reschedule_in)
+
+    assert result is booking
+    assert calls == {
+        "booking_id": booking_id,
+        "reschedule_in": reschedule_in,
+    }
 
 
 @pytest.mark.asyncio
