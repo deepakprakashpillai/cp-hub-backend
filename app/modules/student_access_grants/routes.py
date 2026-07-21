@@ -2,7 +2,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, status
 
-from app.api.deps import DBSession
+from app.api.deps import DBSession, Pagination
+from app.core.pagination import Page
 from app.modules.student_access_grants.schemas import (
     StudentAccessGrantCreate,
     StudentAccessGrantRead,
@@ -12,12 +13,16 @@ from app.modules.student_access_grants.service import StudentAccessGrantService
 router = APIRouter()
 
 
-@router.get("", response_model=list[StudentAccessGrantRead])
+@router.get("", response_model=Page[StudentAccessGrantRead])
 async def list_student_access_grants(
     session: DBSession,
+    pagination: Pagination,
     student_id: UUID | None = None,
-) -> list[StudentAccessGrantRead]:
-    return await StudentAccessGrantService(session).list_grants(student_id=student_id)
+) -> Page[StudentAccessGrantRead]:
+    return await StudentAccessGrantService(session).list_grants(
+        pagination,
+        student_id=student_id,
+    )
 
 
 @router.post("", response_model=StudentAccessGrantRead, status_code=status.HTTP_201_CREATED)

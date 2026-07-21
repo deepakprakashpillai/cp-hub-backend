@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, NotFoundError
+from app.core.pagination import Page, PaginationParams, paginate_scalars
 from app.modules.users.models import User
 from app.modules.users.schemas import UserCreate
 
@@ -12,9 +13,12 @@ class UserService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def list_users(self) -> list[User]:
-        result = await self.session.scalars(select(User).order_by(User.created_at.desc()))
-        return list(result)
+    async def list_users(self, pagination: PaginationParams) -> Page:
+        return await paginate_scalars(
+            self.session,
+            select(User).order_by(User.created_at.desc()),
+            pagination,
+        )
 
     async def get_user(self, user_id: UUID) -> User:
         user = await self.session.get(User, user_id)

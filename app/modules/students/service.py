@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
+from app.core.pagination import Page, PaginationParams, paginate_scalars
 from app.modules.batch_groups.service import BatchGroupService
 from app.modules.bookings.service import BookingService
 from app.modules.students.models import Student, StudentProgramChange
@@ -16,9 +17,12 @@ class StudentService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def list_students(self) -> list[Student]:
-        result = await self.session.scalars(select(Student).order_by(Student.created_at.desc()))
-        return list(result)
+    async def list_students(self, pagination: PaginationParams) -> Page:
+        return await paginate_scalars(
+            self.session,
+            select(Student).order_by(Student.created_at.desc()),
+            pagination,
+        )
 
     async def get_student(self, student_id: UUID) -> Student:
         student = await self.session.get(Student, student_id)
@@ -126,14 +130,14 @@ class StudentService:
 
     async def list_program_changes(
         self,
+        pagination: PaginationParams,
         student_id: UUID | None = None,
-    ) -> list[StudentProgramChange]:
+    ) -> Page:
         query = select(StudentProgramChange).order_by(StudentProgramChange.created_at.desc())
         if student_id is not None:
             query = query.where(StudentProgramChange.student_id == student_id)
 
-        result = await self.session.scalars(query)
-        return list(result)
+        return await paginate_scalars(self.session, query, pagination)
 
     def _validate_active_access_window(
         self,

@@ -2,7 +2,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, status
 
-from app.api.deps import DBSession
+from app.api.deps import DBSession, Pagination
+from app.core.pagination import Page
 from app.modules.student_payments.schemas import (
     StudentPaymentCreate,
     StudentPaymentRead,
@@ -13,12 +14,16 @@ from app.modules.student_payments.service import StudentPaymentService
 router = APIRouter()
 
 
-@router.get("", response_model=list[StudentPaymentRead])
+@router.get("", response_model=Page[StudentPaymentRead])
 async def list_student_payments(
     session: DBSession,
+    pagination: Pagination,
     student_id: UUID | None = None,
-) -> list[StudentPaymentRead]:
-    return await StudentPaymentService(session).list_payments(student_id=student_id)
+) -> Page[StudentPaymentRead]:
+    return await StudentPaymentService(session).list_payments(
+        pagination,
+        student_id=student_id,
+    )
 
 
 @router.post("", response_model=StudentPaymentRead, status_code=status.HTTP_201_CREATED)

@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BadRequestError, NotFoundError
+from app.core.pagination import Page, PaginationParams, paginate_scalars
 from app.modules.packages.models import Package
 from app.modules.packages.schemas import PackageCreate, PackageUpdate
 
@@ -12,9 +13,12 @@ class PackageService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def list_packages(self) -> list[Package]:
-        result = await self.session.scalars(select(Package).order_by(Package.created_at.desc()))
-        return list(result)
+    async def list_packages(self, pagination: PaginationParams) -> Page:
+        return await paginate_scalars(
+            self.session,
+            select(Package).order_by(Package.created_at.desc()),
+            pagination,
+        )
 
     async def get_package(self, package_id: UUID) -> Package:
         package = await self.session.get(Package, package_id)

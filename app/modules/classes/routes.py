@@ -4,7 +4,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query, status
 
-from app.api.deps import DBSession
+from app.api.deps import DBSession, Pagination
+from app.core.pagination import Page
 from app.modules.bookings.schemas import AdminAddStudentToClass, BookingRead, ClassAttendanceMark
 from app.modules.bookings.service import BookingService
 from app.modules.classes.schemas import BatchClassSessionCreate, ClassSessionRead
@@ -24,14 +25,16 @@ def normalize_query_datetime(value: datetime | None) -> datetime | None:
     return value.astimezone(UTC)
 
 
-@router.get("", response_model=list[ClassSessionRead])
+@router.get("", response_model=Page[ClassSessionRead])
 async def list_classes(
     session: DBSession,
+    pagination: Pagination,
     program_type: ProgramTypeQuery = None,
     starts_from: DatetimeQuery = None,
     starts_to: DatetimeQuery = None,
-) -> list[ClassSessionRead]:
+) -> Page[ClassSessionRead]:
     return await ClassSessionService(session).list_class_sessions(
+        pagination,
         program_type=program_type,
         starts_from=normalize_query_datetime(starts_from),
         starts_to=normalize_query_datetime(starts_to),

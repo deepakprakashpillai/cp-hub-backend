@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
+from app.core.pagination import Page, PaginationParams, paginate_scalars
 from app.modules.batch_groups.models import StudentBatchMembership
 from app.modules.bookings.models import Booking, BookingEvent
 from app.modules.bookings.schemas import (
@@ -49,17 +50,17 @@ class BookingService:
 
     async def list_bookings(
         self,
+        pagination: PaginationParams,
         student_id: UUID | None = None,
         class_session_id: UUID | None = None,
-    ) -> list[Booking]:
+    ) -> Page:
         statement = select(Booking).order_by(Booking.created_at.desc())
         if student_id is not None:
             statement = statement.where(Booking.student_id == student_id)
         if class_session_id is not None:
             statement = statement.where(Booking.class_session_id == class_session_id)
 
-        result = await self.session.scalars(statement)
-        return list(result)
+        return await paginate_scalars(self.session, statement, pagination)
 
     async def get_booking(self, booking_id: UUID) -> Booking:
         booking = await self.session.get(Booking, booking_id)
@@ -67,14 +68,18 @@ class BookingService:
             raise NotFoundError("Booking not found")
         return booking
 
-    async def list_booking_events(self, booking_id: UUID) -> list[BookingEvent]:
+    async def list_booking_events(
+        self,
+        booking_id: UUID,
+        pagination: PaginationParams,
+    ) -> Page:
         await self.get_booking(booking_id)
-        result = await self.session.scalars(
+        statement = (
             select(BookingEvent)
             .where(BookingEvent.booking_id == booking_id)
             .order_by(BookingEvent.created_at.asc())
         )
-        return list(result)
+        return await paginate_scalars(self.session, statement, pagination)
 
     async def create_one_on_one_booking(self, booking_in: OneOnOneBookingCreate) -> Booking:
         now = utc_now()

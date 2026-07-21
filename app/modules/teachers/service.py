@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, NotFoundError
+from app.core.pagination import Page, PaginationParams, paginate_scalars
 from app.modules.teachers.models import Teacher
 from app.modules.teachers.schemas import TeacherCreate
 from app.modules.users.models import User
@@ -14,9 +15,12 @@ class TeacherService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def list_teachers(self) -> list[Teacher]:
-        result = await self.session.scalars(select(Teacher).order_by(Teacher.created_at.desc()))
-        return list(result)
+    async def list_teachers(self, pagination: PaginationParams) -> Page:
+        return await paginate_scalars(
+            self.session,
+            select(Teacher).order_by(Teacher.created_at.desc()),
+            pagination,
+        )
 
     async def get_teacher(self, teacher_id: UUID) -> Teacher:
         teacher = await self.session.get(Teacher, teacher_id)

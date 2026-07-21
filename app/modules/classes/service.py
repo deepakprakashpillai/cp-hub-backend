@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, NotFoundError
+from app.core.pagination import Page, PaginationParams, paginate_scalars
 from app.modules.batch_groups.models import BatchGroup
 from app.modules.classes.models import ClassSession
 from app.modules.classes.schemas import BatchClassSessionCreate
@@ -18,10 +19,11 @@ class ClassSessionService:
 
     async def list_class_sessions(
         self,
+        pagination: PaginationParams,
         program_type: StudentProgramType | None = None,
         starts_from: datetime | None = None,
         starts_to: datetime | None = None,
-    ) -> list[ClassSession]:
+    ) -> Page:
         statement = select(ClassSession).order_by(ClassSession.starts_at.asc())
         if program_type is not None:
             statement = statement.where(ClassSession.program_type == program_type)
@@ -30,8 +32,7 @@ class ClassSessionService:
         if starts_to is not None:
             statement = statement.where(ClassSession.starts_at <= starts_to)
 
-        result = await self.session.scalars(statement)
-        return list(result)
+        return await paginate_scalars(self.session, statement, pagination)
 
     async def get_class_session(self, class_session_id: UUID) -> ClassSession:
         class_session = await self.session.get(ClassSession, class_session_id)

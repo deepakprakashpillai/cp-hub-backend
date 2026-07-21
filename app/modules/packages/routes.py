@@ -2,16 +2,17 @@ from uuid import UUID
 
 from fastapi import APIRouter, status
 
-from app.api.deps import DBSession
+from app.api.deps import DBSession, Pagination
+from app.core.pagination import Page
 from app.modules.packages.schemas import PackageCreate, PackageRead, PackageUpdate
 from app.modules.packages.service import PackageService
 
 router = APIRouter()
 
 
-@router.get("", response_model=list[PackageRead])
-async def list_packages(session: DBSession) -> list[PackageRead]:
-    return await PackageService(session).list_packages()
+@router.get("", response_model=Page[PackageRead])
+async def list_packages(session: DBSession, pagination: Pagination) -> Page[PackageRead]:
+    return await PackageService(session).list_packages(pagination)
 
 
 @router.post("", response_model=PackageRead, status_code=status.HTTP_201_CREATED)

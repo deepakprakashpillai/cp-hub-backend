@@ -1,15 +1,19 @@
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.pagination import Page, PaginationParams, paginate_rows
 from app.modules.admin.schemas import (
     AdminStudentAccessGrantCreate,
     AdminStudentBatchGroupSet,
     AdminStudentCreate,
     AdminStudentPaymentCreate,
+    AdminStudentRead,
     AdminTeacherCreate,
+    AdminTeacherRead,
 )
-from app.modules.batch_groups.models import StudentBatchMembership
+from app.modules.batch_groups.models import BatchGroup, StudentBatchMembership
 from app.modules.batch_groups.schemas import BatchSessionBulkGenerate, StudentBatchTransfer
 from app.modules.batch_groups.service import BatchGroupService
 from app.modules.bookings.models import Booking
@@ -24,6 +28,8 @@ from app.modules.bookings.service import BookingService
 from app.modules.classes.models import ClassSession
 from app.modules.classes.schemas import BatchClassSessionCreate
 from app.modules.classes.service import ClassSessionService
+from app.modules.packages.models import Package
+from app.modules.packages.service import PackageService
 from app.modules.student_access_grants.models import StudentAccessGrant
 from app.modules.student_access_grants.schemas import StudentAccessGrantCreate
 from app.modules.student_access_grants.service import StudentAccessGrantService
@@ -39,7 +45,7 @@ from app.modules.teachers.service import TeacherService
 from app.modules.users.models import User
 from app.modules.users.schemas import UserCreate
 from app.modules.users.service import UserService
-from app.shared.enums import UserRole
+from app.shared.enums import StudentProgramType, UserRole
 
 
 class AdminService:
@@ -100,8 +106,53 @@ class AdminService:
         await self.session.refresh(student)
         return user, student
 
-    async def list_student_payments(self, student_id: UUID) -> list[StudentPayment]:
-        return await StudentPaymentService(self.session).list_payments(student_id=student_id)
+    async def list_students(self, pagination: PaginationParams) -> Page[AdminStudentRead]:
+        statement = (
+            select(Student, User)
+            .join(User, Student.user_id == User.id)
+            .order_by(Student.created_at.desc())
+        )
+        rows, total = await paginate_rows(self.session, statement, pagination)
+        return Page(
+            items=[AdminStudentRead(student=student, user=user) for student, user in rows],
+            total=total,
+            page=pagination.page,
+            page_size=pagination.page_size,
+        )
+
+    async def get_student(self, student_id: UUID) -> AdminStudentRead:
+        student = await StudentService(self.session).get_student(student_id)
+        user = await UserService(self.session).get_user(student.user_id)
+        return AdminStudentRead(student=student, user=user)
+
+    async def list_teachers(self, pagination: PaginationParams) -> Page[AdminTeacherRead]:
+        statement = (
+            select(Teacher, User)
+            .join(User, Teacher.user_id == User.id)
+            .order_by(Teacher.created_at.desc())
+        )
+        rows, total = await paginate_rows(self.session, statement, pagination)
+        return Page(
+            items=[AdminTeacherRead(teacher=teacher, user=user) for teacher, user in rows],
+            total=total,
+            page=pagination.page,
+            page_size=pagination.page_size,
+        )
+
+    async def get_teacher(self, teacher_id: UUID) -> AdminTeacherRead:
+        teacher = await TeacherService(self.session).get_teacher(teacher_id)
+        user = await UserService(self.session).get_user(teacher.user_id)
+        return AdminTeacherRead(teacher=teacher, user=user)
+
+    async def list_student_payments(
+        self,
+        student_id: UUID,
+        pagination: PaginationParams,
+    ) -> Page:
+        return await StudentPaymentService(self.session).list_payments(
+            pagination,
+            student_id=student_id,
+        )
 
     async def create_student_payment(
         self,
@@ -121,8 +172,15 @@ class AdminService:
             )
         )
 
-    async def list_student_access_grants(self, student_id: UUID) -> list[StudentAccessGrant]:
-        return await StudentAccessGrantService(self.session).list_grants(student_id=student_id)
+    async def list_student_access_grants(
+        self,
+        student_id: UUID,
+        pagination: PaginationParams,
+    ) -> Page:
+        return await StudentAccessGrantService(self.session).list_grants(
+            pagination,
+            student_id=student_id,
+        )
 
     async def create_student_access_grant(
         self,
@@ -166,8 +224,43 @@ class AdminService:
     async def list_student_batch_memberships(
         self,
         student_id: UUID,
-    ) -> list[StudentBatchMembership]:
-        return await BatchGroupService(self.session).list_student_batch_memberships(student_id)
+        pagination: PaginationParams,
+    ) -> Page:
+        return await BatchGroupService(self.session).list_student_batch_memberships(
+            student_id,
+            pagination,
+        )
+
+    async def list_batch_groups(
+        self,
+        pagination: PaginationParams,
+        is_active: bool | None = None,
+    ) -> Page:
+        return await BatchGroupService(self.session).list_batch_groups(
+            pagination,
+            is_active=is_active,
+        )
+
+    async def get_batch_group(self, batch_group_id: UUID) -> BatchGroup:
+        return await BatchGroupService(self.session).get_batch_group(batch_group_id)
+
+    async def list_batch_group_students(
+        self,
+        batch_group_id: UUID,
+        pagination: PaginationParams,
+        is_active: bool | None = True,
+    ) -> Page:
+        return await BatchGroupService(self.session).list_batch_group_students(
+            batch_group_id=batch_group_id,
+            pagination=pagination,
+            is_active=is_active,
+        )
+
+    async def list_packages(self, pagination: PaginationParams) -> Page:
+        return await PackageService(self.session).list_packages(pagination)
+
+    async def get_package(self, package_id: UUID) -> Package:
+        return await PackageService(self.session).get_package(package_id)
 
     async def generate_batch_sessions(
         self,
@@ -184,6 +277,23 @@ class AdminService:
         class_session_in: BatchClassSessionCreate,
     ) -> ClassSession:
         return await ClassSessionService(self.session).create_batch_class_session(class_session_in)
+
+    async def list_class_sessions(
+        self,
+        pagination: PaginationParams,
+        program_type: StudentProgramType | None = None,
+        starts_from=None,
+        starts_to=None,
+    ) -> Page:
+        return await ClassSessionService(self.session).list_class_sessions(
+            pagination,
+            program_type=program_type,
+            starts_from=starts_from,
+            starts_to=starts_to,
+        )
+
+    async def get_class_session(self, class_session_id: UUID) -> ClassSession:
+        return await ClassSessionService(self.session).get_class_session(class_session_id)
 
     async def add_student_to_class(
         self,
@@ -211,6 +321,28 @@ class AdminService:
         cancel_in: BookingActionRequest,
     ) -> Booking:
         return await BookingService(self.session).admin_cancel_booking(booking_id, cancel_in)
+
+    async def list_bookings(
+        self,
+        pagination: PaginationParams,
+        student_id: UUID | None = None,
+        class_session_id: UUID | None = None,
+    ) -> Page:
+        return await BookingService(self.session).list_bookings(
+            pagination,
+            student_id=student_id,
+            class_session_id=class_session_id,
+        )
+
+    async def get_booking(self, booking_id: UUID) -> Booking:
+        return await BookingService(self.session).get_booking(booking_id)
+
+    async def list_booking_events(
+        self,
+        booking_id: UUID,
+        pagination: PaginationParams,
+    ) -> Page:
+        return await BookingService(self.session).list_booking_events(booking_id, pagination)
 
     async def reschedule_one_on_one_booking(
         self,

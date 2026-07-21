@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
+from app.core.pagination import Page, PaginationParams, paginate_scalars
 from app.modules.batch_groups.models import BatchGroup, StudentBatchMembership
 from app.modules.batch_groups.schemas import (
     BatchGroupCreate,
@@ -43,13 +44,16 @@ class BatchGroupService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def list_batch_groups(self, is_active: bool | None = None) -> list[BatchGroup]:
+    async def list_batch_groups(
+        self,
+        pagination: PaginationParams,
+        is_active: bool | None = None,
+    ) -> Page:
         statement = select(BatchGroup).order_by(BatchGroup.created_at.desc())
         if is_active is not None:
             statement = statement.where(BatchGroup.is_active.is_(is_active))
 
-        result = await self.session.scalars(statement)
-        return list(result)
+        return await paginate_scalars(self.session, statement, pagination)
 
     async def get_batch_group(self, batch_group_id: UUID) -> BatchGroup:
         batch_group = await self.session.get(BatchGroup, batch_group_id)
@@ -108,8 +112,9 @@ class BatchGroupService:
     async def list_batch_group_students(
         self,
         batch_group_id: UUID,
+        pagination: PaginationParams,
         is_active: bool | None = True,
-    ) -> list[StudentBatchMembership]:
+    ) -> Page:
         await self.get_batch_group(batch_group_id)
         statement = (
             select(StudentBatchMembership)
@@ -119,8 +124,7 @@ class BatchGroupService:
         if is_active is not None:
             statement = statement.where(StudentBatchMembership.is_active.is_(is_active))
 
-        result = await self.session.scalars(statement)
-        return list(result)
+        return await paginate_scalars(self.session, statement, pagination)
 
     async def assign_student_to_batch_group(
         self,
@@ -195,17 +199,18 @@ class BatchGroupService:
     async def list_student_batch_memberships(
         self,
         student_id: UUID,
-    ) -> list[StudentBatchMembership]:
+        pagination: PaginationParams,
+    ) -> Page:
         student = await self.session.get(Student, student_id)
         if student is None:
             raise NotFoundError("Student not found")
 
-        result = await self.session.scalars(
+        statement = (
             select(StudentBatchMembership)
             .where(StudentBatchMembership.student_id == student_id)
             .order_by(StudentBatchMembership.assigned_at.desc())
         )
-        return list(result)
+        return await paginate_scalars(self.session, statement, pagination)
 
     async def get_active_student_membership(
         self,

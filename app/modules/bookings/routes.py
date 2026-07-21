@@ -2,7 +2,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, status
 
-from app.api.deps import DBSession
+from app.api.deps import DBSession, Pagination
+from app.core.pagination import Page
 from app.modules.bookings.schemas import (
     BatchBookingCreate,
     BatchBookingReschedule,
@@ -18,13 +19,15 @@ from app.modules.bookings.service import BookingService
 router = APIRouter()
 
 
-@router.get("", response_model=list[BookingRead])
+@router.get("", response_model=Page[BookingRead])
 async def list_bookings(
     session: DBSession,
+    pagination: Pagination,
     student_id: UUID | None = None,
     class_session_id: UUID | None = None,
-) -> list[BookingRead]:
+) -> Page[BookingRead]:
     return await BookingService(session).list_bookings(
+        pagination,
         student_id=student_id,
         class_session_id=class_session_id,
     )
@@ -116,12 +119,13 @@ async def admin_reschedule_batch_booking(
     )
 
 
-@router.get("/{booking_id}/events", response_model=list[BookingEventRead])
+@router.get("/{booking_id}/events", response_model=Page[BookingEventRead])
 async def list_booking_events(
     booking_id: UUID,
     session: DBSession,
-) -> list[BookingEventRead]:
-    return await BookingService(session).list_booking_events(booking_id)
+    pagination: Pagination,
+) -> Page[BookingEventRead]:
+    return await BookingService(session).list_booking_events(booking_id, pagination)
 
 
 @router.post("/{booking_id}/attendance", response_model=BookingRead)

@@ -4,7 +4,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query, Response, status
 
-from app.api.deps import DBSession
+from app.api.deps import DBSession, Pagination
+from app.core.pagination import Page
 from app.modules.schedules.schemas import (
     TeacherAvailabilityBlockCreate,
     TeacherAvailabilityRuleCreate,
@@ -30,12 +31,16 @@ def normalize_query_datetime(value: datetime | None) -> datetime | None:
     return value.astimezone(UTC)
 
 
-@router.get("/teacher-availability/rules", response_model=list[TeacherAvailabilityRuleRead])
+@router.get("/teacher-availability/rules", response_model=Page[TeacherAvailabilityRuleRead])
 async def list_teacher_availability_rules(
     session: DBSession,
+    pagination: Pagination,
     teacher_id: TeacherIdQuery = None,
-) -> list[TeacherAvailabilityRuleRead]:
-    return await ScheduleService(session).list_teacher_availability_rules(teacher_id)
+) -> Page[TeacherAvailabilityRuleRead]:
+    return await ScheduleService(session).list_teacher_availability_rules(
+        pagination,
+        teacher_id,
+    )
 
 
 @router.post(
@@ -76,14 +81,16 @@ async def delete_teacher_availability_rule(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/teacher-availability/slots", response_model=list[TeacherAvailabilitySlotRead])
+@router.get("/teacher-availability/slots", response_model=Page[TeacherAvailabilitySlotRead])
 async def list_teacher_availability_slots(
     session: DBSession,
+    pagination: Pagination,
     teacher_id: TeacherIdQuery = None,
     starts_from: DatetimeQuery = None,
     starts_to: DatetimeQuery = None,
-) -> list[TeacherAvailabilitySlotRead]:
+) -> Page[TeacherAvailabilitySlotRead]:
     return await ScheduleService(session).list_teacher_availability_slots(
+        pagination,
         teacher_id=teacher_id,
         starts_from=normalize_query_datetime(starts_from),
         starts_to=normalize_query_datetime(starts_to),

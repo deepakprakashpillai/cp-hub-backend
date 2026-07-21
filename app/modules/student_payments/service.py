@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BadRequestError, NotFoundError
+from app.core.pagination import Page, PaginationParams, paginate_scalars
 from app.modules.packages.models import Package
 from app.modules.student_payments.models import StudentPayment
 from app.modules.student_payments.schemas import StudentPaymentCreate, StudentPaymentUpdate
@@ -15,13 +16,16 @@ class StudentPaymentService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def list_payments(self, student_id: UUID | None = None) -> list[StudentPayment]:
+    async def list_payments(
+        self,
+        pagination: PaginationParams,
+        student_id: UUID | None = None,
+    ) -> Page:
         query = select(StudentPayment).order_by(StudentPayment.paid_at.desc())
         if student_id is not None:
             query = query.where(StudentPayment.student_id == student_id)
 
-        result = await self.session.scalars(query)
-        return list(result)
+        return await paginate_scalars(self.session, query, pagination)
 
     async def get_payment(self, payment_id: UUID) -> StudentPayment:
         payment = await self.session.get(StudentPayment, payment_id)

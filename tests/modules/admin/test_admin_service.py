@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
+from app.core.pagination import PaginationParams
 from app.modules.admin.schemas import (
     AdminStudentAccessGrantCreate,
     AdminStudentBatchGroupSet,
@@ -54,6 +55,10 @@ class FakeSession:
         self.refresh = AsyncMock()
 
 
+def timestamp() -> datetime:
+    return datetime(2026, 7, 20, tzinfo=UTC)
+
+
 def test_admin_student_create_normalizes_access_datetimes_to_utc() -> None:
     student = AdminStudentCreate(
         full_name="Student One",
@@ -99,6 +104,85 @@ def test_admin_student_access_grant_create_normalizes_start_to_utc() -> None:
 
     assert grant.extend_current_access is True
     assert grant.access_starts_at == datetime(2026, 7, 19, 18, 30, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_admin_student_list_returns_nested_user_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    user = User(
+        id=uuid4(),
+        full_name="Student One",
+        email="student@example.com",
+        role=UserRole.STUDENT,
+        is_active=True,
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+    student = Student(
+        id=uuid4(),
+        user_id=user.id,
+        program_type=StudentProgramType.BATCH,
+        status=StudentStatus.ENROLLED,
+        joined_at=timestamp(),
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+    pagination = PaginationParams(page=2, page_size=10)
+
+    async def fake_paginate_rows(received_session, statement, received_pagination):
+        assert received_session is session
+        assert received_pagination is pagination
+        return [(student, user)], 11
+
+    monkeypatch.setattr("app.modules.admin.service.paginate_rows", fake_paginate_rows)
+
+    page = await AdminService(session).list_students(pagination)
+
+    assert page.total == 11
+    assert page.page == 2
+    assert page.page_size == 10
+    assert page.items[0].student.id == student.id
+    assert page.items[0].user.email == "student@example.com"
+
+
+@pytest.mark.asyncio
+async def test_admin_teacher_list_returns_nested_user_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    user = User(
+        id=uuid4(),
+        full_name="Teacher One",
+        email="teacher@example.com",
+        role=UserRole.TEACHER,
+        is_active=True,
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+    teacher = Teacher(
+        id=uuid4(),
+        user_id=user.id,
+        display_name="Teacher One",
+        is_active=True,
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+    pagination = PaginationParams(page=1, page_size=25)
+
+    async def fake_paginate_rows(received_session, statement, received_pagination):
+        assert received_session is session
+        assert received_pagination is pagination
+        return [(teacher, user)], 1
+
+    monkeypatch.setattr("app.modules.admin.service.paginate_rows", fake_paginate_rows)
+
+    page = await AdminService(session).list_teachers(pagination)
+
+    assert page.total == 1
+    assert page.items[0].teacher.id == teacher.id
+    assert page.items[0].user.full_name == "Teacher One"
 
 
 @pytest.mark.asyncio

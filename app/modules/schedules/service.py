@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, NotFoundError
+from app.core.pagination import Page, PaginationParams, paginate_scalars
 from app.modules.schedules.models import TeacherAvailabilityRule, TeacherAvailabilitySlot
 from app.modules.schedules.schemas import (
     TeacherAvailabilityBlockCreate,
@@ -25,16 +26,16 @@ class ScheduleService:
 
     async def list_teacher_availability_rules(
         self,
+        pagination: PaginationParams,
         teacher_id: UUID | None = None,
-    ) -> list[TeacherAvailabilityRule]:
+    ) -> Page:
         statement = select(TeacherAvailabilityRule).order_by(
             TeacherAvailabilityRule.created_at.desc()
         )
         if teacher_id is not None:
             statement = statement.where(TeacherAvailabilityRule.teacher_id == teacher_id)
 
-        result = await self.session.scalars(statement)
-        return list(result)
+        return await paginate_scalars(self.session, statement, pagination)
 
     async def get_teacher_availability_rule(self, rule_id: UUID) -> TeacherAvailabilityRule:
         rule = await self.session.get(TeacherAvailabilityRule, rule_id)
@@ -87,10 +88,11 @@ class ScheduleService:
 
     async def list_teacher_availability_slots(
         self,
+        pagination: PaginationParams,
         teacher_id: UUID | None = None,
         starts_from=None,
         starts_to=None,
-    ) -> list[TeacherAvailabilitySlot]:
+    ) -> Page:
         statement = select(TeacherAvailabilitySlot).order_by(
             TeacherAvailabilitySlot.starts_at.asc()
         )
@@ -101,8 +103,7 @@ class ScheduleService:
         if starts_to is not None:
             statement = statement.where(TeacherAvailabilitySlot.starts_at <= starts_to)
 
-        result = await self.session.scalars(statement)
-        return list(result)
+        return await paginate_scalars(self.session, statement, pagination)
 
     async def get_teacher_availability_slot(self, slot_id: UUID) -> TeacherAvailabilitySlot:
         slot = await self.session.get(TeacherAvailabilitySlot, slot_id)

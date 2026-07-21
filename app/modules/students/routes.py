@@ -2,7 +2,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, status
 
-from app.api.deps import DBSession
+from app.api.deps import DBSession, Pagination
+from app.core.pagination import Page
 from app.modules.batch_groups.schemas import StudentBatchMembershipRead, StudentBatchTransfer
 from app.modules.batch_groups.service import BatchGroupService
 from app.modules.students.schemas import (
@@ -17,9 +18,9 @@ from app.modules.students.service import StudentService
 router = APIRouter()
 
 
-@router.get("", response_model=list[StudentRead])
-async def list_students(session: DBSession) -> list[StudentRead]:
-    return await StudentService(session).list_students()
+@router.get("", response_model=Page[StudentRead])
+async def list_students(session: DBSession, pagination: Pagination) -> Page[StudentRead]:
+    return await StudentService(session).list_students(pagination)
 
 
 @router.post("", response_model=StudentRead, status_code=status.HTTP_201_CREATED)
@@ -30,12 +31,16 @@ async def create_student(
     return await StudentService(session).create_student(student_in)
 
 
-@router.get("/program-changes", response_model=list[StudentProgramChangeRead])
+@router.get("/program-changes", response_model=Page[StudentProgramChangeRead])
 async def list_student_program_changes(
     session: DBSession,
+    pagination: Pagination,
     student_id: UUID | None = None,
-) -> list[StudentProgramChangeRead]:
-    return await StudentService(session).list_program_changes(student_id=student_id)
+) -> Page[StudentProgramChangeRead]:
+    return await StudentService(session).list_program_changes(
+        pagination,
+        student_id=student_id,
+    )
 
 
 @router.get("/{student_id}", response_model=StudentRead)
@@ -73,9 +78,13 @@ async def transfer_student_batch_group(
     return await BatchGroupService(session).transfer_student_batch_group(student_id, transfer_in)
 
 
-@router.get("/{student_id}/batch-memberships", response_model=list[StudentBatchMembershipRead])
+@router.get("/{student_id}/batch-memberships", response_model=Page[StudentBatchMembershipRead])
 async def list_student_batch_memberships(
     student_id: UUID,
     session: DBSession,
-) -> list[StudentBatchMembershipRead]:
-    return await BatchGroupService(session).list_student_batch_memberships(student_id)
+    pagination: Pagination,
+) -> Page[StudentBatchMembershipRead]:
+    return await BatchGroupService(session).list_student_batch_memberships(
+        student_id,
+        pagination,
+    )

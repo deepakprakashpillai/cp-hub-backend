@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BadRequestError, NotFoundError
+from app.core.pagination import Page, PaginationParams, paginate_scalars
 from app.modules.packages.models import Package
 from app.modules.student_access_grants.models import StudentAccessGrant
 from app.modules.student_access_grants.schemas import StudentAccessGrantCreate
@@ -18,13 +19,16 @@ class StudentAccessGrantService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def list_grants(self, student_id: UUID | None = None) -> list[StudentAccessGrant]:
+    async def list_grants(
+        self,
+        pagination: PaginationParams,
+        student_id: UUID | None = None,
+    ) -> Page:
         query = select(StudentAccessGrant).order_by(StudentAccessGrant.created_at.desc())
         if student_id is not None:
             query = query.where(StudentAccessGrant.student_id == student_id)
 
-        result = await self.session.scalars(query)
-        return list(result)
+        return await paginate_scalars(self.session, query, pagination)
 
     async def get_grant(self, grant_id: UUID) -> StudentAccessGrant:
         grant = await self.session.get(StudentAccessGrant, grant_id)

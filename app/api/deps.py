@@ -4,6 +4,7 @@ from typing import Annotated
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.pagination import PaginationParams
 from app.db.session import async_session
 
 
@@ -13,3 +14,4 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 DBSession = Annotated[AsyncSession, Depends(get_db_session)]
+Pagination = Annotated[PaginationParams, Depends()]

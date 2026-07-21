@@ -3,7 +3,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query, status
 
-from app.api.deps import DBSession
+from app.api.deps import DBSession, Pagination
+from app.core.pagination import Page
 from app.modules.batch_groups.schemas import (
     BatchGroupCreate,
     BatchGroupRead,
@@ -19,12 +20,16 @@ router = APIRouter()
 IsActiveQuery = Annotated[bool | None, Query()]
 
 
-@router.get("", response_model=list[BatchGroupRead])
+@router.get("", response_model=Page[BatchGroupRead])
 async def list_batch_groups(
     session: DBSession,
+    pagination: Pagination,
     is_active: IsActiveQuery = None,
-) -> list[BatchGroupRead]:
-    return await BatchGroupService(session).list_batch_groups(is_active=is_active)
+) -> Page[BatchGroupRead]:
+    return await BatchGroupService(session).list_batch_groups(
+        pagination,
+        is_active=is_active,
+    )
 
 
 @router.post("", response_model=BatchGroupRead, status_code=status.HTTP_201_CREATED)
@@ -60,14 +65,16 @@ async def void_batch_group(
     return await BatchGroupService(session).void_batch_group(batch_group_id)
 
 
-@router.get("/{batch_group_id}/students", response_model=list[StudentBatchMembershipRead])
+@router.get("/{batch_group_id}/students", response_model=Page[StudentBatchMembershipRead])
 async def list_batch_group_students(
     batch_group_id: UUID,
     session: DBSession,
+    pagination: Pagination,
     is_active: IsActiveQuery = True,
-) -> list[StudentBatchMembershipRead]:
+) -> Page[StudentBatchMembershipRead]:
     return await BatchGroupService(session).list_batch_group_students(
         batch_group_id=batch_group_id,
+        pagination=pagination,
         is_active=is_active,
     )
 
@@ -102,4 +109,3 @@ async def generate_batch_sessions(
         created_count=len(class_sessions),
         class_sessions=class_sessions,
     )
-
