@@ -53,12 +53,26 @@ class BookingService:
         pagination: PaginationParams,
         student_id: UUID | None = None,
         class_session_id: UUID | None = None,
+        status: BookingStatus | None = None,
+        teacher_id: UUID | None = None,
+        starts_from: datetime | None = None,
+        starts_to: datetime | None = None,
     ) -> Page:
         statement = select(Booking).order_by(Booking.created_at.desc())
+        if teacher_id is not None or starts_from is not None or starts_to is not None:
+            statement = statement.join(ClassSession, Booking.class_session_id == ClassSession.id)
         if student_id is not None:
             statement = statement.where(Booking.student_id == student_id)
         if class_session_id is not None:
             statement = statement.where(Booking.class_session_id == class_session_id)
+        if status is not None:
+            statement = statement.where(Booking.status == status)
+        if teacher_id is not None:
+            statement = statement.where(ClassSession.teacher_id == teacher_id)
+        if starts_from is not None:
+            statement = statement.where(ClassSession.starts_at >= starts_from)
+        if starts_to is not None:
+            statement = statement.where(ClassSession.starts_at <= starts_to)
 
         return await paginate_scalars(self.session, statement, pagination)
 

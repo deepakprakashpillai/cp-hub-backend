@@ -23,6 +23,9 @@ class ClassSessionService:
         program_type: StudentProgramType | None = None,
         starts_from: datetime | None = None,
         starts_to: datetime | None = None,
+        status: ClassSessionStatus | None = None,
+        teacher_id: UUID | None = None,
+        batch_group_id: UUID | None = None,
     ) -> Page:
         statement = select(ClassSession).order_by(ClassSession.starts_at.asc())
         if program_type is not None:
@@ -31,6 +34,12 @@ class ClassSessionService:
             statement = statement.where(ClassSession.starts_at >= starts_from)
         if starts_to is not None:
             statement = statement.where(ClassSession.starts_at <= starts_to)
+        if status is not None:
+            statement = statement.where(ClassSession.status == status)
+        if teacher_id is not None:
+            statement = statement.where(ClassSession.teacher_id == teacher_id)
+        if batch_group_id is not None:
+            statement = statement.where(ClassSession.batch_group_id == batch_group_id)
 
         return await paginate_scalars(self.session, statement, pagination)
 

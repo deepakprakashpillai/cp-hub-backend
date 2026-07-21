@@ -38,7 +38,7 @@ from app.modules.bookings.schemas import (
 from app.modules.classes.schemas import BatchClassSessionCreate, ClassSessionRead
 from app.modules.packages.schemas import PackageRead
 from app.modules.students.schemas import StudentProgramChangeRead, StudentProgramSwitch
-from app.shared.enums import StudentProgramType, StudentStatus
+from app.shared.enums import BookingStatus, ClassSessionStatus, StudentProgramType, StudentStatus
 
 router = APIRouter()
 DatetimeQuery = Annotated[datetime | None, Query()]
@@ -47,6 +47,8 @@ IsActiveQuery = Annotated[bool | None, Query()]
 SearchQuery = Annotated[str | None, Query(max_length=150)]
 StudentStatusQuery = Annotated[StudentStatus | None, Query()]
 StudentAccessStateQuery = Annotated[AdminStudentAccessState | None, Query()]
+ClassSessionStatusQuery = Annotated[ClassSessionStatus | None, Query()]
+BookingStatusQuery = Annotated[BookingStatus | None, Query()]
 
 
 def normalize_query_datetime(value: datetime | None) -> datetime | None:
@@ -280,12 +282,18 @@ async def list_classes(
     program_type: ProgramTypeQuery = None,
     starts_from: DatetimeQuery = None,
     starts_to: DatetimeQuery = None,
+    status: ClassSessionStatusQuery = None,
+    teacher_id: UUID | None = None,
+    batch_group_id: UUID | None = None,
 ) -> Page[ClassSessionRead]:
     return await AdminService(session).list_class_sessions(
         pagination,
         program_type=program_type,
         starts_from=normalize_query_datetime(starts_from),
         starts_to=normalize_query_datetime(starts_to),
+        status=status,
+        teacher_id=teacher_id,
+        batch_group_id=batch_group_id,
     )
 
 
@@ -303,11 +311,19 @@ async def list_bookings(
     pagination: Pagination,
     student_id: UUID | None = None,
     class_session_id: UUID | None = None,
+    status: BookingStatusQuery = None,
+    teacher_id: UUID | None = None,
+    starts_from: DatetimeQuery = None,
+    starts_to: DatetimeQuery = None,
 ) -> Page[BookingRead]:
     return await AdminService(session).list_bookings(
         pagination,
         student_id=student_id,
         class_session_id=class_session_id,
+        status=status,
+        teacher_id=teacher_id,
+        starts_from=normalize_query_datetime(starts_from),
+        starts_to=normalize_query_datetime(starts_to),
     )
 
 

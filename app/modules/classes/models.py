@@ -89,6 +89,7 @@ class ClassSession(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             values_callable=enum_values,
             validate_strings=True,
         ),
+        index=True,
         nullable=False,
         default=ClassSessionStatus.SCHEDULED,
         server_default=ClassSessionStatus.SCHEDULED.value,

@@ -39,12 +39,14 @@ class Booking(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             values_callable=enum_values,
             validate_strings=True,
         ),
+        index=True,
         nullable=False,
         default=BookingStatus.BOOKED,
         server_default=BookingStatus.BOOKED.value,
     )
     booked_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
+        index=True,
         server_default=func.now(),
         nullable=False,
     )

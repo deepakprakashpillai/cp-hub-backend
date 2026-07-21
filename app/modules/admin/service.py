@@ -463,12 +463,18 @@ class AdminService:
         program_type: StudentProgramType | None = None,
         starts_from=None,
         starts_to=None,
+        status: ClassSessionStatus | None = None,
+        teacher_id: UUID | None = None,
+        batch_group_id: UUID | None = None,
     ) -> Page:
         return await ClassSessionService(self.session).list_class_sessions(
             pagination,
             program_type=program_type,
             starts_from=starts_from,
             starts_to=starts_to,
+            status=status,
+            teacher_id=teacher_id,
+            batch_group_id=batch_group_id,
         )
 
     async def get_class_session(self, class_session_id: UUID) -> ClassSession:
@@ -506,11 +512,19 @@ class AdminService:
         pagination: PaginationParams,
         student_id: UUID | None = None,
         class_session_id: UUID | None = None,
+        status: BookingStatus | None = None,
+        teacher_id: UUID | None = None,
+        starts_from: datetime | None = None,
+        starts_to: datetime | None = None,
     ) -> Page:
         return await BookingService(self.session).list_bookings(
             pagination,
             student_id=student_id,
             class_session_id=class_session_id,
+            status=status,
+            teacher_id=teacher_id,
+            starts_from=starts_from,
+            starts_to=starts_to,
         )
 
     async def get_booking(self, booking_id: UUID) -> Booking:

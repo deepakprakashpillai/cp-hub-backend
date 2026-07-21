@@ -599,6 +599,50 @@ async def test_admin_create_batch_class_delegates_to_class_service(
 
 
 @pytest.mark.asyncio
+async def test_admin_class_list_delegates_with_filters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    class_sessions = object()
+    pagination = PaginationParams(page=1, page_size=25)
+    starts_from = datetime(2026, 7, 22, 8, 0, tzinfo=UTC)
+    starts_to = datetime(2026, 7, 22, 18, 0, tzinfo=UTC)
+    teacher_id = uuid4()
+    batch_group_id = uuid4()
+    calls = {}
+
+    async def fake_list_class_sessions(self, received_pagination, **filters):
+        calls["pagination"] = received_pagination
+        calls["filters"] = filters
+        return class_sessions
+
+    monkeypatch.setattr(ClassSessionService, "list_class_sessions", fake_list_class_sessions)
+
+    result = await AdminService(session).list_class_sessions(
+        pagination,
+        program_type=StudentProgramType.BATCH,
+        starts_from=starts_from,
+        starts_to=starts_to,
+        status=ClassSessionStatus.SCHEDULED,
+        teacher_id=teacher_id,
+        batch_group_id=batch_group_id,
+    )
+
+    assert result is class_sessions
+    assert calls == {
+        "pagination": pagination,
+        "filters": {
+            "program_type": StudentProgramType.BATCH,
+            "starts_from": starts_from,
+            "starts_to": starts_to,
+            "status": ClassSessionStatus.SCHEDULED,
+            "teacher_id": teacher_id,
+            "batch_group_id": batch_group_id,
+        },
+    }
+
+
+@pytest.mark.asyncio
 async def test_admin_add_student_to_class_delegates_to_admin_booking_method(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -679,6 +723,51 @@ async def test_admin_booking_cancel_delegates_to_admin_cancel(
     assert calls == {
         "booking_id": booking_id,
         "cancel_in": cancel_in,
+    }
+
+
+@pytest.mark.asyncio
+async def test_admin_booking_list_delegates_with_filters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    bookings = object()
+    pagination = PaginationParams(page=1, page_size=25)
+    student_id = uuid4()
+    class_session_id = uuid4()
+    teacher_id = uuid4()
+    starts_from = datetime(2026, 7, 22, 8, 0, tzinfo=UTC)
+    starts_to = datetime(2026, 7, 22, 18, 0, tzinfo=UTC)
+    calls = {}
+
+    async def fake_list_bookings(self, received_pagination, **filters):
+        calls["pagination"] = received_pagination
+        calls["filters"] = filters
+        return bookings
+
+    monkeypatch.setattr(BookingService, "list_bookings", fake_list_bookings)
+
+    result = await AdminService(session).list_bookings(
+        pagination,
+        student_id=student_id,
+        class_session_id=class_session_id,
+        status=BookingStatus.BOOKED,
+        teacher_id=teacher_id,
+        starts_from=starts_from,
+        starts_to=starts_to,
+    )
+
+    assert result is bookings
+    assert calls == {
+        "pagination": pagination,
+        "filters": {
+            "student_id": student_id,
+            "class_session_id": class_session_id,
+            "status": BookingStatus.BOOKED,
+            "teacher_id": teacher_id,
+            "starts_from": starts_from,
+            "starts_to": starts_to,
+        },
     }
 
 
