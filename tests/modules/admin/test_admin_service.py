@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -53,6 +53,18 @@ class FakeSession:
     def __init__(self) -> None:
         self.commit = AsyncMock()
         self.refresh = AsyncMock()
+
+
+class FakeResult:
+    def __init__(self, *, rows=None, one_row=None) -> None:
+        self.rows = rows or []
+        self.one_row = one_row
+
+    def all(self):
+        return self.rows
+
+    def one(self):
+        return self.one_row
 
 
 def timestamp() -> datetime:
@@ -183,6 +195,81 @@ async def test_admin_teacher_list_returns_nested_user_data(
     assert page.total == 1
     assert page.items[0].teacher.id == teacher.id
     assert page.items[0].user.full_name == "Teacher One"
+
+
+@pytest.mark.asyncio
+async def test_admin_dashboard_summary_returns_aggregate_counts() -> None:
+    session = FakeSession()
+    session.scalar = AsyncMock(side_effect=[100, 55, 8, 12, 4])
+    session.execute = AsyncMock(
+        side_effect=[
+            FakeResult(
+                rows=[
+                    (StudentStatus.ACTIVE, 70),
+                    (StudentStatus.ENROLLED, 10),
+                    (StudentStatus.PAUSED, 5),
+                    (StudentStatus.COMPLETED, 12),
+                    (StudentStatus.CANCELLED, 3),
+                ]
+            ),
+            FakeResult(rows=[(True, 9), (False, 3)]),
+            FakeResult(rows=[(True, 3), (False, 1)]),
+            FakeResult(
+                rows=[
+                    (ClassSessionStatus.SCHEDULED, 6),
+                    (ClassSessionStatus.COMPLETED, 2),
+                    (ClassSessionStatus.CANCELLED, 1),
+                ]
+            ),
+            FakeResult(
+                rows=[
+                    (BookingStatus.BOOKED, 7),
+                    (BookingStatus.CANCELLED, 2),
+                    (BookingStatus.ATTENDED, 5),
+                ]
+            ),
+            FakeResult(one_row=(4, 125000)),
+        ]
+    )
+    starts_from = datetime(2026, 7, 22, tzinfo=UTC)
+    starts_to = starts_from + timedelta(days=1)
+    now = datetime(2026, 7, 22, 8, 30, tzinfo=UTC)
+
+    summary = await AdminService(session).get_dashboard_summary(
+        starts_from=starts_from,
+        starts_to=starts_to,
+        now=now,
+    )
+
+    assert summary.window.starts_from == starts_from
+    assert summary.window.starts_to == starts_to
+    assert summary.window.generated_at == now
+    assert summary.students.total == 100
+    assert summary.students.active == 70
+    assert summary.students.active_with_valid_access == 55
+    assert summary.students.expired_access == 8
+    assert summary.teachers.active == 9
+    assert summary.teachers.inactive == 3
+    assert summary.batch_groups.active == 3
+    assert summary.classes.scheduled == 6
+    assert summary.bookings.booked == 7
+    assert summary.bookings.missed == 0
+    assert summary.payments.count == 4
+    assert summary.payments.total_amount_paid == 125000
+
+
+@pytest.mark.asyncio
+async def test_admin_dashboard_summary_rejects_inverted_window() -> None:
+    session = FakeSession()
+    starts_from = datetime(2026, 7, 23, tzinfo=UTC)
+    starts_to = datetime(2026, 7, 22, tzinfo=UTC)
+
+    with pytest.raises(ValueError, match="starts_from must be before starts_to"):
+        await AdminService(session).get_dashboard_summary(
+            starts_from=starts_from,
+            starts_to=starts_to,
+            now=starts_from,
+        )
 
 
 @pytest.mark.asyncio

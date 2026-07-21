@@ -2,11 +2,12 @@ from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import DBSession, Pagination
 from app.core.pagination import Page
 from app.modules.admin.schemas import (
+    AdminDashboardSummaryRead,
     AdminStudentAccessGrantCreate,
     AdminStudentAccessGrantRead,
     AdminStudentBatchGroupSet,
@@ -50,6 +51,21 @@ def normalize_query_datetime(value: datetime | None) -> datetime | None:
     if value.tzinfo is None or value.utcoffset() is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+@router.get("/dashboard/summary", response_model=AdminDashboardSummaryRead)
+async def get_dashboard_summary(
+    session: DBSession,
+    starts_from: DatetimeQuery = None,
+    starts_to: DatetimeQuery = None,
+) -> AdminDashboardSummaryRead:
+    try:
+        return await AdminService(session).get_dashboard_summary(
+            starts_from=normalize_query_datetime(starts_from),
+            starts_to=normalize_query_datetime(starts_to),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/students", response_model=Page[AdminStudentRead])

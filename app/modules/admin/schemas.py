@@ -104,6 +104,63 @@ class AdminStudentRead(BaseModel):
     student: StudentRead
 
 
+class AdminDashboardWindowRead(BaseModel):
+    starts_from: datetime
+    starts_to: datetime
+    generated_at: datetime
+
+
+class AdminDashboardStudentSummary(BaseModel):
+    total: int
+    active: int
+    enrolled: int
+    paused: int
+    completed: int
+    cancelled: int
+    active_with_valid_access: int
+    expired_access: int
+
+
+class AdminDashboardTeacherSummary(BaseModel):
+    total: int
+    active: int
+    inactive: int
+
+
+class AdminDashboardBatchGroupSummary(BaseModel):
+    total: int
+    active: int
+    inactive: int
+
+
+class AdminDashboardClassSummary(BaseModel):
+    scheduled: int
+    completed: int
+    cancelled: int
+
+
+class AdminDashboardBookingSummary(BaseModel):
+    booked: int
+    cancelled: int
+    attended: int
+    missed: int
+
+
+class AdminDashboardPaymentSummary(BaseModel):
+    count: int
+    total_amount_paid: int
+
+
+class AdminDashboardSummaryRead(BaseModel):
+    window: AdminDashboardWindowRead
+    students: AdminDashboardStudentSummary
+    teachers: AdminDashboardTeacherSummary
+    batch_groups: AdminDashboardBatchGroupSummary
+    classes: AdminDashboardClassSummary
+    bookings: AdminDashboardBookingSummary
+    payments: AdminDashboardPaymentSummary
+
+
 class AdminStudentPaymentRead(StudentPaymentRead):
     pass
 
