@@ -6,13 +6,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.modules.batch_groups.models import StudentBatchMembership
-from app.modules.bookings.models import Booking
-from app.modules.bookings.schemas import BatchBookingCreate, OneOnOneBookingCreate
+from app.modules.bookings.models import Booking, BookingEvent
+from app.modules.bookings.schemas import (
+    BatchBookingCreate,
+    BatchBookingReschedule,
+    BookingActionRequest,
+    OneOnOneBookingCreate,
+    OneOnOneBookingReschedule,
+)
 from app.modules.classes.models import ClassSession
 from app.modules.schedules.models import TeacherAvailabilitySlot
 from app.modules.students.models import Student
+from app.modules.users.models import User
 from app.shared.enums import (
     AvailabilitySlotStatus,
+    BookingEventType,
     BookingStatus,
     ClassSessionStatus,
     StudentProgramType,
@@ -21,6 +29,12 @@ from app.shared.enums import (
 from app.shared.utils import utc_now
 
 BATCH_BOOKING_CLOSES_BEFORE_START = timedelta(hours=3)
+STUDENT_BOOKING_CHANGE_CUTOFF = timedelta(hours=24)
+BOOKED_REASON = "booked"
+STUDENT_CANCEL_REASON = "cancelled by student"
+ADMIN_CANCEL_REASON = "cancelled by admin"
+RESCHEDULE_REASON = "rescheduled"
+EMPTY_CLASS_REASON = "empty class"
 
 
 class BookingService:
@@ -47,8 +61,123 @@ class BookingService:
             raise NotFoundError("Booking not found")
         return booking
 
+    async def list_booking_events(self, booking_id: UUID) -> list[BookingEvent]:
+        await self.get_booking(booking_id)
+        result = await self.session.scalars(
+            select(BookingEvent)
+            .where(BookingEvent.booking_id == booking_id)
+            .order_by(BookingEvent.created_at.asc())
+        )
+        return list(result)
+
     async def create_one_on_one_booking(self, booking_in: OneOnOneBookingCreate) -> Booking:
         now = utc_now()
+        return await self._create_one_on_one_booking(
+            booking_in=booking_in,
+            now=now,
+            event_type=BookingEventType.BOOKED,
+            reason=BOOKED_REASON,
+            actor_user_id=None,
+            event_metadata={},
+            commit=True,
+        )
+
+    async def create_batch_booking(self, booking_in: BatchBookingCreate) -> Booking:
+        now = utc_now()
+        return await self._create_batch_booking(
+            booking_in=booking_in,
+            now=now,
+            event_type=BookingEventType.BOOKED,
+            reason=BOOKED_REASON,
+            actor_user_id=None,
+            event_metadata={},
+            commit=True,
+        )
+
+    async def cancel_booking(
+        self,
+        booking_id: UUID,
+        cancel_in: BookingActionRequest,
+    ) -> Booking:
+        return await self._cancel_booking(
+            booking_id=booking_id,
+            actor_user_id=cancel_in.actor_user_id,
+            reason=cancel_in.reason or STUDENT_CANCEL_REASON,
+            event_type=BookingEventType.CANCELLED_BY_STUDENT,
+            enforce_student_cutoff=True,
+            commit=True,
+        )
+
+    async def admin_cancel_booking(
+        self,
+        booking_id: UUID,
+        cancel_in: BookingActionRequest,
+    ) -> Booking:
+        return await self._cancel_booking(
+            booking_id=booking_id,
+            actor_user_id=cancel_in.actor_user_id,
+            reason=cancel_in.reason or ADMIN_CANCEL_REASON,
+            event_type=BookingEventType.CANCELLED_BY_ADMIN,
+            enforce_student_cutoff=False,
+            commit=True,
+        )
+
+    async def reschedule_one_on_one_booking(
+        self,
+        booking_id: UUID,
+        reschedule_in: OneOnOneBookingReschedule,
+    ) -> Booking:
+        return await self._reschedule_one_on_one_booking(
+            booking_id=booking_id,
+            reschedule_in=reschedule_in,
+            enforce_student_cutoff=True,
+        )
+
+    async def admin_reschedule_one_on_one_booking(
+        self,
+        booking_id: UUID,
+        reschedule_in: OneOnOneBookingReschedule,
+    ) -> Booking:
+        return await self._reschedule_one_on_one_booking(
+            booking_id=booking_id,
+            reschedule_in=reschedule_in,
+            enforce_student_cutoff=False,
+        )
+
+    async def reschedule_batch_booking(
+        self,
+        booking_id: UUID,
+        reschedule_in: BatchBookingReschedule,
+    ) -> Booking:
+        return await self._reschedule_batch_booking(
+            booking_id=booking_id,
+            reschedule_in=reschedule_in,
+            enforce_student_cutoff=True,
+        )
+
+    async def admin_reschedule_batch_booking(
+        self,
+        booking_id: UUID,
+        reschedule_in: BatchBookingReschedule,
+    ) -> Booking:
+        return await self._reschedule_batch_booking(
+            booking_id=booking_id,
+            reschedule_in=reschedule_in,
+            enforce_student_cutoff=False,
+        )
+
+    async def _create_one_on_one_booking(
+        self,
+        *,
+        booking_in: OneOnOneBookingCreate,
+        now: datetime,
+        event_type: BookingEventType,
+        reason: str,
+        actor_user_id: UUID | None,
+        event_metadata: dict,
+        commit: bool,
+    ) -> Booking:
+        await self._get_optional_user(actor_user_id)
         student = await self._get_student(booking_in.student_id)
         self._ensure_student_can_book(
             student=student,
@@ -75,6 +204,7 @@ class BookingService:
             teacher_availability_slot_id=slot.id,
             program_type=StudentProgramType.ONE_ON_ONE,
             batch_slot=None,
+            batch_group_id=None,
             starts_at=slot.starts_at,
             ends_at=slot.ends_at,
             status=ClassSessionStatus.SCHEDULED,
@@ -91,13 +221,32 @@ class BookingService:
         )
         slot.status = AvailabilitySlotStatus.BOOKED
         self.session.add(booking)
+        await self.session.flush()
+        self._add_booking_event(
+            booking_id=booking.id,
+            event_type=event_type,
+            actor_user_id=actor_user_id,
+            reason=reason,
+            event_metadata=event_metadata,
+        )
 
-        await self.session.commit()
-        await self.session.refresh(booking)
+        if commit:
+            await self.session.commit()
+            await self.session.refresh(booking)
         return booking
 
-    async def create_batch_booking(self, booking_in: BatchBookingCreate) -> Booking:
-        now = utc_now()
+    async def _create_batch_booking(
+        self,
+        *,
+        booking_in: BatchBookingCreate,
+        now: datetime,
+        event_type: BookingEventType,
+        reason: str,
+        actor_user_id: UUID | None,
+        event_metadata: dict,
+        commit: bool,
+    ) -> Booking:
+        await self._get_optional_user(actor_user_id)
         student = await self._get_student(booking_in.student_id)
         self._ensure_student_can_book(
             student=student,
@@ -135,9 +284,161 @@ class BookingService:
             booked_at=now,
         )
         self.session.add(booking)
-        await self.session.commit()
-        await self.session.refresh(booking)
+        await self.session.flush()
+        self._add_booking_event(
+            booking_id=booking.id,
+            event_type=event_type,
+            actor_user_id=actor_user_id,
+            reason=reason,
+            event_metadata=event_metadata,
+        )
+
+        if commit:
+            await self.session.commit()
+            await self.session.refresh(booking)
         return booking
+
+    async def _cancel_booking(
+        self,
+        *,
+        booking_id: UUID,
+        actor_user_id: UUID | None,
+        reason: str,
+        event_type: BookingEventType,
+        enforce_student_cutoff: bool,
+        commit: bool,
+    ) -> Booking:
+        await self._get_optional_user(actor_user_id)
+        booking = await self._get_booking_for_update(booking_id)
+        class_session = await self._get_class_session_for_update(booking.class_session_id)
+        now = utc_now()
+
+        await self._cancel_existing_booking(
+            booking=booking,
+            class_session=class_session,
+            now=now,
+            actor_user_id=actor_user_id,
+            reason=reason,
+            event_type=event_type,
+            enforce_student_cutoff=enforce_student_cutoff,
+        )
+
+        if commit:
+            await self.session.commit()
+            await self.session.refresh(booking)
+        return booking
+
+    async def _reschedule_one_on_one_booking(
+        self,
+        *,
+        booking_id: UUID,
+        reschedule_in: OneOnOneBookingReschedule,
+        enforce_student_cutoff: bool,
+    ) -> Booking:
+        await self._get_optional_user(reschedule_in.actor_user_id)
+        booking = await self._get_booking_for_update(booking_id)
+        class_session = await self._get_class_session_for_update(booking.class_session_id)
+        if class_session.program_type != StudentProgramType.ONE_ON_ONE:
+            raise ConflictError("Booking is not for a one-on-one class")
+
+        now = utc_now()
+        reason = reschedule_in.reason or RESCHEDULE_REASON
+        await self._cancel_existing_booking(
+            booking=booking,
+            class_session=class_session,
+            now=now,
+            actor_user_id=reschedule_in.actor_user_id,
+            reason=reason,
+            event_type=BookingEventType.RESCHEDULED_FROM,
+            enforce_student_cutoff=enforce_student_cutoff,
+        )
+        new_booking = await self._create_one_on_one_booking(
+            booking_in=OneOnOneBookingCreate(
+                student_id=booking.student_id,
+                teacher_availability_slot_id=reschedule_in.teacher_availability_slot_id,
+            ),
+            now=now,
+            event_type=BookingEventType.RESCHEDULED_TO,
+            reason=reason,
+            actor_user_id=reschedule_in.actor_user_id,
+            event_metadata={"rescheduled_from_booking_id": str(booking.id)},
+            commit=True,
+        )
+        return new_booking
+
+    async def _reschedule_batch_booking(
+        self,
+        *,
+        booking_id: UUID,
+        reschedule_in: BatchBookingReschedule,
+        enforce_student_cutoff: bool,
+    ) -> Booking:
+        await self._get_optional_user(reschedule_in.actor_user_id)
+        booking = await self._get_booking_for_update(booking_id)
+        class_session = await self._get_class_session_for_update(booking.class_session_id)
+        if class_session.program_type != StudentProgramType.BATCH:
+            raise ConflictError("Booking is not for a batch class")
+
+        now = utc_now()
+        reason = reschedule_in.reason or RESCHEDULE_REASON
+        await self._cancel_existing_booking(
+            booking=booking,
+            class_session=class_session,
+            now=now,
+            actor_user_id=reschedule_in.actor_user_id,
+            reason=reason,
+            event_type=BookingEventType.RESCHEDULED_FROM,
+            enforce_student_cutoff=enforce_student_cutoff,
+        )
+        new_booking = await self._create_batch_booking(
+            booking_in=BatchBookingCreate(
+                student_id=booking.student_id,
+                class_session_id=reschedule_in.class_session_id,
+            ),
+            now=now,
+            event_type=BookingEventType.RESCHEDULED_TO,
+            reason=reason,
+            actor_user_id=reschedule_in.actor_user_id,
+            event_metadata={"rescheduled_from_booking_id": str(booking.id)},
+            commit=True,
+        )
+        return new_booking
+
+    async def _cancel_existing_booking(
+        self,
+        *,
+        booking: Booking,
+        class_session: ClassSession,
+        now: datetime,
+        actor_user_id: UUID | None,
+        reason: str,
+        event_type: BookingEventType,
+        enforce_student_cutoff: bool,
+    ) -> None:
+        if booking.status != BookingStatus.BOOKED:
+            raise ConflictError("Booking is not active")
+
+        if enforce_student_cutoff:
+            self._ensure_student_can_change_booking(class_session=class_session, now=now)
+
+        booking.status = BookingStatus.CANCELLED
+        self._add_booking_event(
+            booking_id=booking.id,
+            event_type=event_type,
+            actor_user_id=actor_user_id,
+            reason=reason,
+            event_metadata={},
+        )
+        await self.session.flush()
+
+        if class_session.program_type == StudentProgramType.ONE_ON_ONE:
+            await self._cancel_one_on_one_class_session(class_session, now=now)
+        if class_session.program_type == StudentProgramType.BATCH:
+            await self._cancel_empty_batch_class_session(
+                booking=booking,
+                class_session=class_session,
+                actor_user_id=actor_user_id,
+            )
 
     async def cancel_future_bookings_for_student(
         self,
@@ -160,6 +461,13 @@ class BookingService:
         cancelled_count = 0
         for booking, class_session in result.all():
             booking.status = BookingStatus.CANCELLED
+            self._add_booking_event(
+                booking_id=booking.id,
+                event_type=BookingEventType.CANCELLED_BY_ADMIN,
+                actor_user_id=None,
+                reason="program switch",
+                event_metadata={},
+            )
             cancelled_count += 1
 
             if class_session.program_type == StudentProgramType.ONE_ON_ONE:
@@ -177,11 +485,27 @@ class BookingService:
 
         return cancelled_count
 
+    async def _get_booking_for_update(self, booking_id: UUID) -> Booking:
+        booking = await self.session.scalar(
+            select(Booking).where(Booking.id == booking_id).with_for_update()
+        )
+        if booking is None:
+            raise NotFoundError("Booking not found")
+        return booking
+
     async def _get_student(self, student_id: UUID) -> Student:
         student = await self.session.get(Student, student_id)
         if student is None:
             raise NotFoundError("Student not found")
         return student
+
+    async def _get_optional_user(self, user_id: UUID | None) -> User | None:
+        if user_id is None:
+            return None
+        user = await self.session.get(User, user_id)
+        if user is None:
+            raise NotFoundError("User not found")
+        return user
 
     async def _get_teacher_availability_slot_for_update(
         self,
@@ -282,6 +606,83 @@ class BookingService:
         )
         if active_booking_count >= class_session.capacity:
             raise ConflictError("Batch class session is full")
+
+    def _ensure_student_can_change_booking(
+        self,
+        *,
+        class_session: ClassSession,
+        now: datetime,
+    ) -> None:
+        if class_session.starts_at <= now:
+            raise BadRequestError("Cannot change a past or started booking")
+        if class_session.starts_at - now < STUDENT_BOOKING_CHANGE_CUTOFF:
+            raise ConflictError("Booking change window is closed")
+
+    async def _cancel_one_on_one_class_session(
+        self,
+        class_session: ClassSession,
+        *,
+        now: datetime,
+    ) -> None:
+        if class_session.status == ClassSessionStatus.SCHEDULED:
+            class_session.status = ClassSessionStatus.CANCELLED
+
+        if class_session.starts_at <= now or class_session.teacher_availability_slot_id is None:
+            return
+
+        slot = await self.session.get(
+            TeacherAvailabilitySlot,
+            class_session.teacher_availability_slot_id,
+        )
+        if slot is not None and slot.status == AvailabilitySlotStatus.BOOKED:
+            slot.status = AvailabilitySlotStatus.AVAILABLE
+
+    async def _cancel_empty_batch_class_session(
+        self,
+        *,
+        booking: Booking,
+        class_session: ClassSession,
+        actor_user_id: UUID | None,
+    ) -> None:
+        active_booking_count = await self.session.scalar(
+            select(func.count())
+            .select_from(Booking)
+            .where(
+                Booking.class_session_id == class_session.id,
+                Booking.status == BookingStatus.BOOKED,
+            )
+        )
+        if (
+            active_booking_count == 0
+            and class_session.status == ClassSessionStatus.SCHEDULED
+        ):
+            class_session.status = ClassSessionStatus.CANCELLED
+            self._add_booking_event(
+                booking_id=booking.id,
+                event_type=BookingEventType.CLASS_CANCELLED_EMPTY,
+                actor_user_id=actor_user_id,
+                reason=EMPTY_CLASS_REASON,
+                event_metadata={"class_session_id": str(class_session.id)},
+            )
+
+    def _add_booking_event(
+        self,
+        *,
+        booking_id: UUID,
+        event_type: BookingEventType,
+        actor_user_id: UUID | None,
+        reason: str,
+        event_metadata: dict,
+    ) -> BookingEvent:
+        event = BookingEvent(
+            booking_id=booking_id,
+            event_type=event_type,
+            actor_user_id=actor_user_id,
+            reason=reason,
+            event_metadata=event_metadata,
+        )
+        self.session.add(event)
+        return event
 
 
 def _normalize_utc_datetime(value: datetime) -> datetime:

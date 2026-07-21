@@ -1,11 +1,11 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, Uuid, func, text
+from sqlalchemy import JSON, DateTime, Enum, ForeignKey, Index, String, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
-from app.shared.enums import BookingStatus, enum_values
+from app.shared.enums import BookingEventType, BookingStatus, enum_values
 
 
 class Booking(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -47,4 +47,39 @@ class Booking(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
+    )
+
+
+class BookingEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "booking_events"
+
+    booking_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("bookings.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    event_type: Mapped[BookingEventType] = mapped_column(
+        Enum(
+            BookingEventType,
+            name="booking_event_type",
+            values_callable=enum_values,
+            validate_strings=True,
+        ),
+        index=True,
+        nullable=False,
+    )
+    actor_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+    reason: Mapped[str] = mapped_column(String(1000), nullable=False)
+    event_metadata: Mapped[dict] = mapped_column(
+        "metadata",
+        JSON,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
     )

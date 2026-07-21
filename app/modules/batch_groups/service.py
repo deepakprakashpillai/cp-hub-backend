@@ -14,12 +14,18 @@ from app.modules.batch_groups.schemas import (
     StudentBatchMembershipAssign,
     StudentBatchTransfer,
 )
-from app.modules.bookings.models import Booking
+from app.modules.bookings.models import Booking, BookingEvent
 from app.modules.classes.models import ClassSession
 from app.modules.students.models import Student
 from app.modules.teachers.models import Teacher
 from app.modules.users.models import User
-from app.shared.enums import BookingStatus, ClassSessionStatus, DayOfWeek, StudentProgramType
+from app.shared.enums import (
+    BookingEventType,
+    BookingStatus,
+    ClassSessionStatus,
+    DayOfWeek,
+    StudentProgramType,
+)
 from app.shared.utils import utc_now
 
 DAY_TO_INDEX = {
@@ -376,6 +382,15 @@ class BatchGroupService:
         )
         for booking, _class_session in result.all():
             booking.status = BookingStatus.CANCELLED
+            self.session.add(
+                BookingEvent(
+                    booking_id=booking.id,
+                    event_type=BookingEventType.CANCELLED_BY_ADMIN,
+                    actor_user_id=None,
+                    reason="batch group voided",
+                    event_metadata={},
+                )
+            )
 
         future_sessions = await self.session.scalars(
             select(ClassSession).where(
@@ -406,6 +421,15 @@ class BatchGroupService:
         )
         for booking, _class_session in result.all():
             booking.status = BookingStatus.CANCELLED
+            self.session.add(
+                BookingEvent(
+                    booking_id=booking.id,
+                    event_type=BookingEventType.CANCELLED_BY_ADMIN,
+                    actor_user_id=None,
+                    reason="batch transfer",
+                    event_metadata={},
+                )
+            )
 
 
 def build_utc_session_datetimes(

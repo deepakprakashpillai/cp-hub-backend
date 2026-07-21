@@ -79,6 +79,15 @@ class BookingStatus(StrEnum):
     MISSED = "missed"
 
 
+class BookingEventType(StrEnum):
+    BOOKED = "booked"
+    CANCELLED_BY_STUDENT = "cancelled_by_student"
+    CANCELLED_BY_ADMIN = "cancelled_by_admin"
+    RESCHEDULED_FROM = "rescheduled_from"
+    RESCHEDULED_TO = "rescheduled_to"
+    CLASS_CANCELLED_EMPTY = "class_cancelled_empty"
+
+
 class LeadStatus(StrEnum):
     NEW = "new"
     CONTACTED = "contacted"
