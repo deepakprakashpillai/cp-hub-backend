@@ -3,10 +3,10 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.core.pagination import Page, PaginationParams, paginate_scalars
 from app.modules.users.models import User
-from app.modules.users.schemas import UserCreate
+from app.modules.users.schemas import UserCreate, UserUpdate
 
 
 class UserService:
@@ -38,4 +38,25 @@ class UserService:
             await self.session.refresh(user)
         else:
             await self.session.flush()
+        return user
+
+    async def update_user(self, user_id: UUID, user_in: UserUpdate) -> User:
+        user = await self.get_user(user_id)
+        update_data = user_in.model_dump(exclude_unset=True)
+
+        for non_nullable_field in ("full_name", "email", "is_active"):
+            if non_nullable_field in update_data and update_data[non_nullable_field] is None:
+                raise BadRequestError(f"{non_nullable_field} cannot be null")
+
+        new_email = update_data.get("email")
+        if new_email is not None and new_email != user.email:
+            existing_user = await self.session.scalar(select(User).where(User.email == new_email))
+            if existing_user is not None and existing_user.id != user.id:
+                raise ConflictError("A user with this email already exists")
+
+        for field, value in update_data.items():
+            setattr(user, field, value)
+
+        await self.session.commit()
+        await self.session.refresh(user)
         return user

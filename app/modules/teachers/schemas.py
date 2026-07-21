@@ -16,6 +16,13 @@ class TeacherCreate(TeacherBase):
     pass
 
 
+class TeacherUpdate(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=150)
+    bio: str | None = None
+    profile_photo_url: str | None = Field(default=None, max_length=500)
+    is_active: bool | None = None
+
+
 class TeacherRead(TeacherBase):
     id: UUID
     created_at: datetime

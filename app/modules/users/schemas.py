@@ -18,6 +18,13 @@ class UserCreate(UserBase):
     pass
 
 
+class UserUpdate(BaseModel):
+    full_name: str | None = Field(default=None, min_length=1, max_length=150)
+    email: EmailStr | None = None
+    phone: str | None = Field(default=None, max_length=30)
+    is_active: bool | None = None
+
+
 class UserRead(UserBase):
     id: UUID
     created_at: datetime

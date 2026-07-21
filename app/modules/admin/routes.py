@@ -36,8 +36,14 @@ from app.modules.bookings.schemas import (
     OneOnOneBookingReschedule,
 )
 from app.modules.classes.schemas import BatchClassSessionCreate, ClassSessionRead
-from app.modules.packages.schemas import PackageRead
-from app.modules.students.schemas import StudentProgramChangeRead, StudentProgramSwitch
+from app.modules.packages.schemas import PackageRead, PackageUpdate
+from app.modules.students.schemas import (
+    StudentProgramChangeRead,
+    StudentProgramSwitch,
+    StudentUpdate,
+)
+from app.modules.teachers.schemas import TeacherUpdate
+from app.modules.users.schemas import UserRead, UserUpdate
 from app.shared.enums import BookingStatus, ClassSessionStatus, StudentProgramType, StudentStatus
 
 router = APIRouter()
@@ -94,6 +100,15 @@ async def list_students(
     )
 
 
+@router.patch("/users/{user_id}", response_model=UserRead)
+async def update_user(
+    user_id: UUID,
+    user_in: UserUpdate,
+    session: DBSession,
+) -> UserRead:
+    return await AdminService(session).update_user(user_id, user_in)
+
+
 @router.post("/teachers", response_model=AdminTeacherRead, status_code=status.HTTP_201_CREATED)
 async def create_teacher(
     teacher_in: AdminTeacherCreate,
@@ -125,6 +140,15 @@ async def get_teacher(
     return await AdminService(session).get_teacher(teacher_id)
 
 
+@router.patch("/teachers/{teacher_id}", response_model=AdminTeacherRead)
+async def update_teacher(
+    teacher_id: UUID,
+    teacher_in: TeacherUpdate,
+    session: DBSession,
+) -> AdminTeacherRead:
+    return await AdminService(session).update_teacher(teacher_id, teacher_in)
+
+
 @router.post("/students", response_model=AdminStudentRead, status_code=status.HTTP_201_CREATED)
 async def create_student(
     student_in: AdminStudentCreate,
@@ -140,6 +164,15 @@ async def get_student(
     session: DBSession,
 ) -> AdminStudentRead:
     return await AdminService(session).get_student(student_id)
+
+
+@router.patch("/students/{student_id}", response_model=AdminStudentRead)
+async def update_student(
+    student_id: UUID,
+    student_in: StudentUpdate,
+    session: DBSession,
+) -> AdminStudentRead:
+    return await AdminService(session).update_student(student_id, student_in)
 
 
 @router.get("/students/{student_id}/payments", response_model=Page[AdminStudentPaymentRead])
@@ -273,6 +306,15 @@ async def get_package(
     session: DBSession,
 ) -> PackageRead:
     return await AdminService(session).get_package(package_id)
+
+
+@router.patch("/packages/{package_id}", response_model=PackageRead)
+async def update_package(
+    package_id: UUID,
+    package_in: PackageUpdate,
+    session: DBSession,
+) -> PackageRead:
+    return await AdminService(session).update_package(package_id, package_in)
 
 
 @router.get("/classes", response_model=Page[ClassSessionRead])

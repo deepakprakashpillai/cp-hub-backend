@@ -29,14 +29,18 @@ from app.modules.bookings.schemas import (
 from app.modules.bookings.service import BookingService
 from app.modules.classes.schemas import BatchClassSessionCreate
 from app.modules.classes.service import ClassSessionService
+from app.modules.packages.schemas import PackageUpdate
+from app.modules.packages.service import PackageService
 from app.modules.student_access_grants.service import StudentAccessGrantService
 from app.modules.student_payments.service import StudentPaymentService
 from app.modules.students.models import Student
-from app.modules.students.schemas import StudentProgramSwitch
+from app.modules.students.schemas import StudentProgramSwitch, StudentUpdate
 from app.modules.students.service import StudentService
 from app.modules.teachers.models import Teacher
+from app.modules.teachers.schemas import TeacherUpdate
 from app.modules.teachers.service import TeacherService
 from app.modules.users.models import User
+from app.modules.users.schemas import UserUpdate
 from app.modules.users.service import UserService
 from app.shared.enums import (
     BatchSlot,
@@ -267,6 +271,201 @@ async def test_admin_teacher_list_applies_search_and_active_filter(
     assert "users.email ILIKE" in sql
     assert "users.phone ILIKE" in sql
     assert "teachers.is_active IS false" in sql
+
+
+@pytest.mark.asyncio
+async def test_admin_student_update_uses_program_switch_for_program_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    student_id = uuid4()
+    user = User(
+        id=uuid4(),
+        full_name="Student One",
+        email="student@example.com",
+        role=UserRole.STUDENT,
+        is_active=True,
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+    before_switch = Student(
+        id=student_id,
+        user_id=user.id,
+        program_type=StudentProgramType.BATCH,
+        status=StudentStatus.ACTIVE,
+        access_starts_at=timestamp(),
+        access_ends_at=timestamp() + timedelta(days=30),
+        joined_at=timestamp(),
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+    after_switch = Student(
+        id=student_id,
+        user_id=user.id,
+        program_type=StudentProgramType.ONE_ON_ONE,
+        status=StudentStatus.ACTIVE,
+        access_starts_at=timestamp(),
+        access_ends_at=timestamp() + timedelta(days=30),
+        joined_at=timestamp(),
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+    calls = {}
+
+    async def fake_update_student(self, received_student_id, student_in):
+        calls["update_student_id"] = received_student_id
+        calls["update_in"] = student_in
+        return before_switch
+
+    async def fake_switch_program(self, received_student_id, switch_in):
+        calls["switch_student_id"] = received_student_id
+        calls["switch_in"] = switch_in
+        return object()
+
+    async def fake_get_student(self, received_student_id):
+        calls["get_student_id"] = received_student_id
+        return after_switch
+
+    async def fake_get_user(self, received_user_id):
+        calls["user_id"] = received_user_id
+        return user
+
+    monkeypatch.setattr(StudentService, "update_student", fake_update_student)
+    monkeypatch.setattr(StudentService, "switch_program", fake_switch_program)
+    monkeypatch.setattr(StudentService, "get_student", fake_get_student)
+    monkeypatch.setattr(UserService, "get_user", fake_get_user)
+
+    result = await AdminService(session).update_student(
+        student_id,
+        StudentUpdate(
+            program_type=StudentProgramType.ONE_ON_ONE,
+            status=StudentStatus.ACTIVE,
+        ),
+    )
+
+    assert result.student.program_type == StudentProgramType.ONE_ON_ONE
+    assert result.user.id == user.id
+    assert calls["update_student_id"] == student_id
+    assert calls["update_in"] == StudentUpdate(status=StudentStatus.ACTIVE)
+    assert calls["switch_student_id"] == student_id
+    assert calls["switch_in"] == StudentProgramSwitch(
+        new_program_type=StudentProgramType.ONE_ON_ONE
+    )
+    assert calls["get_student_id"] == student_id
+    assert calls["user_id"] == user.id
+
+
+@pytest.mark.asyncio
+async def test_admin_teacher_update_returns_nested_user_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    user = User(
+        id=uuid4(),
+        full_name="Teacher One",
+        email="teacher@example.com",
+        role=UserRole.TEACHER,
+        is_active=True,
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+    teacher = Teacher(
+        id=uuid4(),
+        user_id=user.id,
+        display_name="Teacher Updated",
+        is_active=False,
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+    calls = {}
+
+    async def fake_update_teacher(self, received_teacher_id, teacher_in):
+        calls["teacher_id"] = received_teacher_id
+        calls["teacher_in"] = teacher_in
+        return teacher
+
+    async def fake_get_user(self, received_user_id):
+        calls["user_id"] = received_user_id
+        return user
+
+    monkeypatch.setattr(TeacherService, "update_teacher", fake_update_teacher)
+    monkeypatch.setattr(UserService, "get_user", fake_get_user)
+
+    result = await AdminService(session).update_teacher(
+        teacher.id,
+        TeacherUpdate(display_name="Teacher Updated", is_active=False),
+    )
+
+    assert result.teacher.display_name == "Teacher Updated"
+    assert result.user.id == user.id
+    assert calls == {
+        "teacher_id": teacher.id,
+        "teacher_in": TeacherUpdate(display_name="Teacher Updated", is_active=False),
+        "user_id": user.id,
+    }
+
+
+@pytest.mark.asyncio
+async def test_admin_package_update_delegates_to_package_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    package_id = uuid4()
+    package = object()
+    calls = {}
+
+    async def fake_update_package(self, received_package_id, package_in):
+        calls["package_id"] = received_package_id
+        calls["package_in"] = package_in
+        return package
+
+    monkeypatch.setattr(PackageService, "update_package", fake_update_package)
+
+    result = await AdminService(session).update_package(
+        package_id,
+        PackageUpdate(name="Updated IELTS"),
+    )
+
+    assert result is package
+    assert calls == {
+        "package_id": package_id,
+        "package_in": PackageUpdate(name="Updated IELTS"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_admin_user_update_delegates_to_user_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    user = User(
+        id=uuid4(),
+        full_name="Updated User",
+        email="updated@example.com",
+        role=UserRole.STUDENT,
+        is_active=False,
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+    calls = {}
+
+    async def fake_update_user(self, received_user_id, user_in):
+        calls["user_id"] = received_user_id
+        calls["user_in"] = user_in
+        return user
+
+    monkeypatch.setattr(UserService, "update_user", fake_update_user)
+
+    result = await AdminService(session).update_user(
+        user.id,
+        UserUpdate(full_name="Updated User", is_active=False),
+    )
+
+    assert result is user
+    assert calls == {
+        "user_id": user.id,
+        "user_in": UserUpdate(full_name="Updated User", is_active=False),
+    }
 
 
 @pytest.mark.asyncio

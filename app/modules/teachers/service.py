@@ -3,10 +3,10 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.core.pagination import Page, PaginationParams, paginate_scalars
 from app.modules.teachers.models import Teacher
-from app.modules.teachers.schemas import TeacherCreate
+from app.modules.teachers.schemas import TeacherCreate, TeacherUpdate
 from app.modules.users.models import User
 from app.shared.enums import UserRole
 
@@ -49,4 +49,19 @@ class TeacherService:
             await self.session.refresh(teacher)
         else:
             await self.session.flush()
+        return teacher
+
+    async def update_teacher(self, teacher_id: UUID, teacher_in: TeacherUpdate) -> Teacher:
+        teacher = await self.get_teacher(teacher_id)
+        update_data = teacher_in.model_dump(exclude_unset=True)
+
+        for non_nullable_field in ("display_name", "is_active"):
+            if non_nullable_field in update_data and update_data[non_nullable_field] is None:
+                raise BadRequestError(f"{non_nullable_field} cannot be null")
+
+        for field, value in update_data.items():
+            setattr(teacher, field, value)
+
+        await self.session.commit()
+        await self.session.refresh(teacher)
         return teacher

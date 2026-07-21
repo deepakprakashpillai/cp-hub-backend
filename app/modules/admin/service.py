@@ -4,6 +4,7 @@ from uuid import UUID
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import BadRequestError
 from app.core.pagination import Page, PaginationParams, paginate_rows
 from app.modules.admin.schemas import (
     AdminDashboardBatchGroupSummary,
@@ -39,6 +40,7 @@ from app.modules.classes.models import ClassSession
 from app.modules.classes.schemas import BatchClassSessionCreate
 from app.modules.classes.service import ClassSessionService
 from app.modules.packages.models import Package
+from app.modules.packages.schemas import PackageUpdate
 from app.modules.packages.service import PackageService
 from app.modules.student_access_grants.models import StudentAccessGrant
 from app.modules.student_access_grants.schemas import StudentAccessGrantCreate
@@ -47,13 +49,13 @@ from app.modules.student_payments.models import StudentPayment
 from app.modules.student_payments.schemas import StudentPaymentCreate
 from app.modules.student_payments.service import StudentPaymentService
 from app.modules.students.models import Student, StudentProgramChange
-from app.modules.students.schemas import StudentCreate, StudentProgramSwitch
+from app.modules.students.schemas import StudentCreate, StudentProgramSwitch, StudentUpdate
 from app.modules.students.service import StudentService
 from app.modules.teachers.models import Teacher
-from app.modules.teachers.schemas import TeacherCreate
+from app.modules.teachers.schemas import TeacherCreate, TeacherUpdate
 from app.modules.teachers.service import TeacherService
 from app.modules.users.models import User
-from app.modules.users.schemas import UserCreate
+from app.modules.users.schemas import UserCreate, UserUpdate
 from app.modules.users.service import UserService
 from app.shared.enums import (
     BookingStatus,
@@ -173,6 +175,32 @@ class AdminService:
         user = await UserService(self.session).get_user(student.user_id)
         return AdminStudentRead(student=student, user=user)
 
+    async def update_student(
+        self,
+        student_id: UUID,
+        student_in: StudentUpdate,
+    ) -> AdminStudentRead:
+        update_data = student_in.model_dump(exclude_unset=True)
+        program_type = update_data.pop("program_type", None)
+        if "program_type" in student_in.model_fields_set and program_type is None:
+            raise BadRequestError("program_type cannot be null")
+
+        student_service = StudentService(self.session)
+        if update_data:
+            student = await student_service.update_student(student_id, StudentUpdate(**update_data))
+        else:
+            student = await student_service.get_student(student_id)
+
+        if program_type is not None and program_type != student.program_type:
+            await student_service.switch_program(
+                student_id,
+                StudentProgramSwitch(new_program_type=program_type),
+            )
+            student = await student_service.get_student(student_id)
+
+        user = await UserService(self.session).get_user(student.user_id)
+        return AdminStudentRead(student=student, user=user)
+
     async def list_teachers(
         self,
         pagination: PaginationParams,
@@ -207,6 +235,15 @@ class AdminService:
 
     async def get_teacher(self, teacher_id: UUID) -> AdminTeacherRead:
         teacher = await TeacherService(self.session).get_teacher(teacher_id)
+        user = await UserService(self.session).get_user(teacher.user_id)
+        return AdminTeacherRead(teacher=teacher, user=user)
+
+    async def update_teacher(
+        self,
+        teacher_id: UUID,
+        teacher_in: TeacherUpdate,
+    ) -> AdminTeacherRead:
+        teacher = await TeacherService(self.session).update_teacher(teacher_id, teacher_in)
         user = await UserService(self.session).get_user(teacher.user_id)
         return AdminTeacherRead(teacher=teacher, user=user)
 
@@ -440,6 +477,12 @@ class AdminService:
 
     async def get_package(self, package_id: UUID) -> Package:
         return await PackageService(self.session).get_package(package_id)
+
+    async def update_package(self, package_id: UUID, package_in: PackageUpdate) -> Package:
+        return await PackageService(self.session).update_package(package_id, package_in)
+
+    async def update_user(self, user_id: UUID, user_in: UserUpdate) -> User:
+        return await UserService(self.session).update_user(user_id, user_in)
 
     async def generate_batch_sessions(
         self,
