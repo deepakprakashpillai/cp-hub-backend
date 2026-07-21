@@ -33,6 +33,10 @@ class BookingActionRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=1000)
 
 
+class AdminAddStudentToClass(BookingActionRequest):
+    student_id: UUID
+
+
 class OneOnOneBookingReschedule(BookingActionRequest):
     teacher_availability_slot_id: UUID
 

@@ -8,6 +8,7 @@ from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.modules.batch_groups.models import StudentBatchMembership
 from app.modules.bookings.models import Booking, BookingEvent
 from app.modules.bookings.schemas import (
+    AdminAddStudentToClass,
     BatchBookingCreate,
     BatchBookingReschedule,
     BookingActionRequest,
@@ -39,6 +40,7 @@ RESCHEDULE_REASON = "rescheduled"
 EMPTY_CLASS_REASON = "empty class"
 ATTENDED_REASON = "present"
 MISSED_REASON = "absent"
+MANUAL_ADD_REASON = "manually added by admin"
 
 
 class BookingService:
@@ -226,6 +228,50 @@ class BookingService:
             await self.session.refresh(booking)
         return bookings
 
+    async def admin_add_student_to_class(
+        self,
+        class_session_id: UUID,
+        add_in: AdminAddStudentToClass,
+    ) -> Booking:
+        await self._get_optional_user(add_in.actor_user_id)
+        now = utc_now()
+        student = await self._get_student(add_in.student_id)
+        self._ensure_student_has_active_access(student=student, now=now)
+
+        class_session = await self._get_class_session_for_update(class_session_id)
+        if class_session.status != ClassSessionStatus.SCHEDULED:
+            raise ConflictError("Students can only be manually added to scheduled classes")
+
+        await self._ensure_no_active_booking_for_class_session(
+            student_id=student.id,
+            class_session_id=class_session.id,
+        )
+        await self._ensure_no_active_class_on_day(
+            student_id=student.id,
+            class_starts_at=class_session.starts_at,
+        )
+        await self._ensure_class_session_capacity_available(class_session)
+
+        booking = Booking(
+            student_id=student.id,
+            class_session_id=class_session.id,
+            status=BookingStatus.BOOKED,
+            booked_at=now,
+        )
+        self.session.add(booking)
+        await self.session.flush()
+        self._add_booking_event(
+            booking_id=booking.id,
+            event_type=BookingEventType.MANUALLY_ADDED_BY_ADMIN,
+            actor_user_id=add_in.actor_user_id,
+            reason=add_in.reason or MANUAL_ADD_REASON,
+            event_metadata={"class_session_id": str(class_session.id)},
+        )
+
+        await self.session.commit()
+        await self.session.refresh(booking)
+        return booking
+
     async def _create_one_on_one_booking(
         self,
         *,
@@ -335,7 +381,7 @@ class BookingService:
             student_id=student.id,
             class_starts_at=class_session.starts_at,
         )
-        await self._ensure_batch_capacity_available(class_session)
+        await self._ensure_class_session_capacity_available(class_session)
 
         booking = Booking(
             student_id=student.id,
@@ -608,6 +654,14 @@ class BookingService:
     ) -> None:
         if student.program_type != expected_program_type:
             raise ConflictError("Student program type does not match this booking flow")
+        self._ensure_student_has_active_access(student=student, now=now)
+
+    def _ensure_student_has_active_access(
+        self,
+        *,
+        student: Student,
+        now: datetime,
+    ) -> None:
         if student.status != StudentStatus.ACTIVE:
             raise ConflictError("Student is not active")
         if student.access_starts_at is None or student.access_ends_at is None:
@@ -625,6 +679,17 @@ class BookingService:
         student_id: UUID,
         class_starts_at: datetime,
     ) -> None:
+        await self._ensure_no_active_class_on_day(
+            student_id=student_id,
+            class_starts_at=class_starts_at,
+        )
+
+    async def _ensure_no_active_class_on_day(
+        self,
+        *,
+        student_id: UUID,
+        class_starts_at: datetime,
+    ) -> None:
         day_start = datetime.combine(
             _normalize_utc_datetime(class_starts_at).date(),
             time.min,
@@ -636,14 +701,30 @@ class BookingService:
             .join(ClassSession, Booking.class_session_id == ClassSession.id)
             .where(
                 Booking.student_id == student_id,
-                Booking.status == BookingStatus.BOOKED,
-                ClassSession.status == ClassSessionStatus.SCHEDULED,
+                Booking.status != BookingStatus.CANCELLED,
+                ClassSession.status != ClassSessionStatus.CANCELLED,
                 ClassSession.starts_at >= day_start,
                 ClassSession.starts_at < day_end,
             )
         )
         if existing_booking is not None:
-            raise ConflictError("Student already has a booked class on this day")
+            raise ConflictError("Student already has an active class on this day")
+
+    async def _ensure_no_active_booking_for_class_session(
+        self,
+        *,
+        student_id: UUID,
+        class_session_id: UUID,
+    ) -> None:
+        existing_booking = await self.session.scalar(
+            select(Booking).where(
+                Booking.student_id == student_id,
+                Booking.class_session_id == class_session_id,
+                Booking.status != BookingStatus.CANCELLED,
+            )
+        )
+        if existing_booking is not None:
+            raise ConflictError("Student already has an active booking for this class")
 
     async def _ensure_no_active_session_for_slot(self, slot_id: UUID) -> None:
         existing_session = await self.session.scalar(
@@ -655,17 +736,17 @@ class BookingService:
         if existing_session is not None:
             raise ConflictError("Teacher availability slot already has an active class session")
 
-    async def _ensure_batch_capacity_available(self, class_session: ClassSession) -> None:
+    async def _ensure_class_session_capacity_available(self, class_session: ClassSession) -> None:
         active_booking_count = await self.session.scalar(
             select(func.count())
             .select_from(Booking)
             .where(
                 Booking.class_session_id == class_session.id,
-                Booking.status == BookingStatus.BOOKED,
+                Booking.status != BookingStatus.CANCELLED,
             )
         )
         if active_booking_count >= class_session.capacity:
-            raise ConflictError("Batch class session is full")
+            raise ConflictError("Class session is full")
 
     def _ensure_student_can_change_booking(
         self,

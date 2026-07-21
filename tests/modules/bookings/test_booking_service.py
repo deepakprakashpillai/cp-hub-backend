@@ -66,6 +66,39 @@ def test_student_cannot_book_when_access_window_is_expired() -> None:
         )
 
 
+def test_manual_admin_add_access_check_allows_any_program_type() -> None:
+    student = Student(
+        id=uuid4(),
+        user_id=uuid4(),
+        program_type=StudentProgramType.ONE_ON_ONE,
+        status=StudentStatus.ACTIVE,
+        access_starts_at=datetime(2026, 7, 1, tzinfo=UTC),
+        access_ends_at=datetime(2026, 8, 1, tzinfo=UTC),
+    )
+
+    BookingService(session=None)._ensure_student_has_active_access(
+        student=student,
+        now=datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+
+def test_manual_admin_add_access_check_rejects_inactive_student() -> None:
+    student = Student(
+        id=uuid4(),
+        user_id=uuid4(),
+        program_type=StudentProgramType.BATCH,
+        status=StudentStatus.PAUSED,
+        access_starts_at=datetime(2026, 7, 1, tzinfo=UTC),
+        access_ends_at=datetime(2026, 8, 1, tzinfo=UTC),
+    )
+
+    with pytest.raises(ConflictError, match="Student is not active"):
+        BookingService(session=None)._ensure_student_has_active_access(
+            student=student,
+            now=datetime(2026, 7, 20, tzinfo=UTC),
+        )
+
+
 def test_student_can_change_booking_exactly_twenty_four_hours_before_class() -> None:
     class_session = ClassSession(
         id=uuid4(),
