@@ -4,7 +4,7 @@ from uuid import UUID
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import BadRequestError
+from app.core.exceptions import BadRequestError, ConflictError
 from app.core.pagination import Page, PaginationParams, paginate_rows
 from app.modules.admin.schemas import (
     AdminDashboardBatchGroupSummary,
@@ -20,12 +20,17 @@ from app.modules.admin.schemas import (
     AdminStudentBatchGroupSet,
     AdminStudentCreate,
     AdminStudentPaymentCreate,
+    AdminStudentPaymentUpdate,
     AdminStudentRead,
     AdminTeacherCreate,
     AdminTeacherRead,
 )
 from app.modules.batch_groups.models import BatchGroup, StudentBatchMembership
-from app.modules.batch_groups.schemas import BatchSessionBulkGenerate, StudentBatchTransfer
+from app.modules.batch_groups.schemas import (
+    BatchGroupUpdate,
+    BatchSessionBulkGenerate,
+    StudentBatchTransfer,
+)
 from app.modules.batch_groups.service import BatchGroupService
 from app.modules.bookings.models import Booking
 from app.modules.bookings.schemas import (
@@ -42,11 +47,21 @@ from app.modules.classes.service import ClassSessionService
 from app.modules.packages.models import Package
 from app.modules.packages.schemas import PackageUpdate
 from app.modules.packages.service import PackageService
+from app.modules.schedules.models import TeacherAvailabilityRule, TeacherAvailabilitySlot
+from app.modules.schedules.schemas import (
+    TeacherAvailabilityBlockCreate,
+    TeacherAvailabilityRuleCreate,
+    TeacherAvailabilityRuleUpdate,
+    TeacherAvailabilitySlotBulkCreate,
+    TeacherAvailabilitySlotCreate,
+    TeacherAvailabilitySlotUpdate,
+)
+from app.modules.schedules.service import ScheduleService
 from app.modules.student_access_grants.models import StudentAccessGrant
 from app.modules.student_access_grants.schemas import StudentAccessGrantCreate
 from app.modules.student_access_grants.service import StudentAccessGrantService
 from app.modules.student_payments.models import StudentPayment
-from app.modules.student_payments.schemas import StudentPaymentCreate
+from app.modules.student_payments.schemas import StudentPaymentCreate, StudentPaymentUpdate
 from app.modules.student_payments.service import StudentPaymentService
 from app.modules.students.models import Student, StudentProgramChange
 from app.modules.students.schemas import StudentCreate, StudentProgramSwitch, StudentUpdate
@@ -388,6 +403,28 @@ class AdminService:
             )
         )
 
+    async def update_student_payment(
+        self,
+        student_id: UUID,
+        payment_id: UUID,
+        payment_in: AdminStudentPaymentUpdate,
+    ) -> StudentPayment:
+        payment_service = StudentPaymentService(self.session)
+        payment = await payment_service.get_payment(payment_id)
+        if payment.student_id != student_id:
+            raise ConflictError("Payment does not belong to student")
+        return await payment_service.update_payment(
+            payment_id,
+            StudentPaymentUpdate(**payment_in.model_dump(exclude_unset=True)),
+        )
+
+    async def delete_student_payment(self, student_id: UUID, payment_id: UUID) -> None:
+        payment_service = StudentPaymentService(self.session)
+        payment = await payment_service.get_payment(payment_id)
+        if payment.student_id != student_id:
+            raise ConflictError("Payment does not belong to student")
+        await payment_service.delete_payment(payment_id)
+
     async def list_student_access_grants(
         self,
         student_id: UUID,
@@ -460,6 +497,19 @@ class AdminService:
     async def get_batch_group(self, batch_group_id: UUID) -> BatchGroup:
         return await BatchGroupService(self.session).get_batch_group(batch_group_id)
 
+    async def update_batch_group(
+        self,
+        batch_group_id: UUID,
+        batch_group_in: BatchGroupUpdate,
+    ) -> BatchGroup:
+        return await BatchGroupService(self.session).update_batch_group(
+            batch_group_id,
+            batch_group_in,
+        )
+
+    async def void_batch_group(self, batch_group_id: UUID) -> BatchGroup:
+        return await BatchGroupService(self.session).void_batch_group(batch_group_id)
+
     async def list_batch_group_students(
         self,
         batch_group_id: UUID,
@@ -481,8 +531,101 @@ class AdminService:
     async def update_package(self, package_id: UUID, package_in: PackageUpdate) -> Package:
         return await PackageService(self.session).update_package(package_id, package_in)
 
+    async def void_package(self, package_id: UUID) -> Package:
+        return await PackageService(self.session).void_package(package_id)
+
     async def update_user(self, user_id: UUID, user_in: UserUpdate) -> User:
         return await UserService(self.session).update_user(user_id, user_in)
+
+    async def list_teacher_availability_rules(
+        self,
+        pagination: PaginationParams,
+        teacher_id: UUID | None = None,
+    ) -> Page:
+        return await ScheduleService(self.session).list_teacher_availability_rules(
+            pagination,
+            teacher_id=teacher_id,
+        )
+
+    async def create_teacher_availability_rule(
+        self,
+        rule_in: TeacherAvailabilityRuleCreate,
+    ) -> TeacherAvailabilityRule:
+        return await ScheduleService(self.session).create_teacher_availability_rule(rule_in)
+
+    async def get_teacher_availability_rule(self, rule_id: UUID) -> TeacherAvailabilityRule:
+        return await ScheduleService(self.session).get_teacher_availability_rule(rule_id)
+
+    async def update_teacher_availability_rule(
+        self,
+        rule_id: UUID,
+        rule_in: TeacherAvailabilityRuleUpdate,
+    ) -> TeacherAvailabilityRule:
+        return await ScheduleService(self.session).update_teacher_availability_rule(
+            rule_id,
+            rule_in,
+        )
+
+    async def delete_teacher_availability_rule(self, rule_id: UUID) -> None:
+        await ScheduleService(self.session).delete_teacher_availability_rule(rule_id)
+
+    async def list_teacher_availability_slots(
+        self,
+        pagination: PaginationParams,
+        teacher_id: UUID | None = None,
+        starts_from: datetime | None = None,
+        starts_to: datetime | None = None,
+    ) -> Page:
+        return await ScheduleService(self.session).list_teacher_availability_slots(
+            pagination,
+            teacher_id=teacher_id,
+            starts_from=starts_from,
+            starts_to=starts_to,
+        )
+
+    async def create_teacher_availability_slot(
+        self,
+        slot_in: TeacherAvailabilitySlotCreate,
+    ) -> TeacherAvailabilitySlot:
+        return await ScheduleService(self.session).create_teacher_availability_slot(slot_in)
+
+    async def create_teacher_availability_slots_bulk(
+        self,
+        slots_in: TeacherAvailabilitySlotBulkCreate,
+    ) -> list[TeacherAvailabilitySlot]:
+        return await ScheduleService(self.session).create_teacher_availability_slots_bulk(slots_in)
+
+    async def create_teacher_availability_block(
+        self,
+        block_in: TeacherAvailabilityBlockCreate,
+    ) -> TeacherAvailabilitySlot:
+        return await ScheduleService(self.session).create_teacher_availability_block(block_in)
+
+    async def get_teacher_availability_slot(self, slot_id: UUID) -> TeacherAvailabilitySlot:
+        return await ScheduleService(self.session).get_teacher_availability_slot(slot_id)
+
+    async def update_teacher_availability_slot(
+        self,
+        slot_id: UUID,
+        slot_in: TeacherAvailabilitySlotUpdate,
+    ) -> TeacherAvailabilitySlot:
+        return await ScheduleService(self.session).update_teacher_availability_slot(
+            slot_id,
+            slot_in,
+        )
+
+    async def delete_teacher_availability_slot(self, slot_id: UUID) -> None:
+        await ScheduleService(self.session).delete_teacher_availability_slot(slot_id)
+
+    async def generate_teacher_availability_slots(
+        self,
+        teacher_id: UUID,
+        days_ahead: int = 14,
+    ):
+        return await ScheduleService(self.session).generate_teacher_availability_slots(
+            teacher_id,
+            days_ahead=days_ahead,
+        )
 
     async def generate_batch_sessions(
         self,
@@ -522,6 +665,16 @@ class AdminService:
 
     async def get_class_session(self, class_session_id: UUID) -> ClassSession:
         return await ClassSessionService(self.session).get_class_session(class_session_id)
+
+    async def cancel_class_session(
+        self,
+        class_session_id: UUID,
+        cancel_in: BookingActionRequest,
+    ) -> ClassSession:
+        return await BookingService(self.session).admin_cancel_class_session(
+            class_session_id,
+            cancel_in,
+        )
 
     async def add_student_to_class(
         self,

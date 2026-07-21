@@ -215,6 +215,14 @@ class ScheduleService:
         slot.status = AvailabilitySlotStatus.CANCELLED
         await self.session.commit()
 
+    async def generate_teacher_availability_slots(self, teacher_id: UUID, *, days_ahead: int = 14):
+        await self._get_teacher(teacher_id)
+        return await sync_teacher_availability_slots(
+            self.session,
+            teacher_id=teacher_id,
+            days_ahead=days_ahead,
+        )
+
     async def _get_teacher(self, teacher_id: UUID) -> Teacher:
         teacher = await self.session.get(Teacher, teacher_id)
         if teacher is None:

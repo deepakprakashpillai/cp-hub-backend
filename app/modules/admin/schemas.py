@@ -80,6 +80,22 @@ class AdminStudentPaymentCreate(BaseModel):
         return self
 
 
+class AdminStudentPaymentUpdate(BaseModel):
+    package_id: UUID | None = None
+    amount_paid: int | None = Field(default=None, ge=0)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    payment_method: PaymentMethod | None = None
+    paid_at: datetime | None = None
+    created_by_user_id: UUID | None = None
+    notes: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_paid_at(self) -> "AdminStudentPaymentUpdate":
+        if self.paid_at is not None:
+            self.paid_at = normalize_paid_at(self.paid_at)
+        return self
+
+
 class AdminStudentAccessGrantCreate(BaseModel):
     package_id: UUID | None = None
     grant_type: StudentAccessGrantType
@@ -157,6 +173,13 @@ class AdminDashboardBookingSummary(BaseModel):
 class AdminDashboardPaymentSummary(BaseModel):
     count: int
     total_amount_paid: int
+
+
+class AdminTeacherAvailabilityGenerationResult(BaseModel):
+    rules_checked: int
+    slots_created: int
+    slots_cancelled: int
+    slots_skipped: int
 
 
 class AdminDashboardSummaryRead(BaseModel):

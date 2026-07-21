@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from app.api.deps import DBSession, Pagination
 from app.core.pagination import Page
@@ -15,13 +15,16 @@ from app.modules.admin.schemas import (
     AdminStudentCreate,
     AdminStudentPaymentCreate,
     AdminStudentPaymentRead,
+    AdminStudentPaymentUpdate,
     AdminStudentRead,
+    AdminTeacherAvailabilityGenerationResult,
     AdminTeacherCreate,
     AdminTeacherRead,
 )
 from app.modules.admin.service import AdminService
 from app.modules.batch_groups.schemas import (
     BatchGroupRead,
+    BatchGroupUpdate,
     BatchSessionBulkGenerate,
     BatchSessionBulkGenerateResult,
     StudentBatchMembershipRead,
@@ -37,6 +40,16 @@ from app.modules.bookings.schemas import (
 )
 from app.modules.classes.schemas import BatchClassSessionCreate, ClassSessionRead
 from app.modules.packages.schemas import PackageRead, PackageUpdate
+from app.modules.schedules.schemas import (
+    TeacherAvailabilityBlockCreate,
+    TeacherAvailabilityRuleCreate,
+    TeacherAvailabilityRuleRead,
+    TeacherAvailabilityRuleUpdate,
+    TeacherAvailabilitySlotBulkCreate,
+    TeacherAvailabilitySlotCreate,
+    TeacherAvailabilitySlotRead,
+    TeacherAvailabilitySlotUpdate,
+)
 from app.modules.students.schemas import (
     StudentProgramChangeRead,
     StudentProgramSwitch,
@@ -55,6 +68,8 @@ StudentStatusQuery = Annotated[StudentStatus | None, Query()]
 StudentAccessStateQuery = Annotated[AdminStudentAccessState | None, Query()]
 ClassSessionStatusQuery = Annotated[ClassSessionStatus | None, Query()]
 BookingStatusQuery = Annotated[BookingStatus | None, Query()]
+TeacherIdQuery = Annotated[UUID | None, Query()]
+DaysAheadQuery = Annotated[int, Query(ge=1, le=90)]
 
 
 def normalize_query_datetime(value: datetime | None) -> datetime | None:
@@ -149,6 +164,179 @@ async def update_teacher(
     return await AdminService(session).update_teacher(teacher_id, teacher_in)
 
 
+@router.post(
+    "/teachers/{teacher_id}/availability/generate",
+    response_model=AdminTeacherAvailabilityGenerationResult,
+)
+async def generate_teacher_availability_slots(
+    teacher_id: UUID,
+    session: DBSession,
+    days_ahead: DaysAheadQuery = 14,
+) -> AdminTeacherAvailabilityGenerationResult:
+    result = await AdminService(session).generate_teacher_availability_slots(
+        teacher_id,
+        days_ahead=days_ahead,
+    )
+    return AdminTeacherAvailabilityGenerationResult(
+        rules_checked=result.rules_checked,
+        slots_created=result.slots_created,
+        slots_cancelled=result.slots_cancelled,
+        slots_skipped=result.slots_skipped,
+    )
+
+
+@router.get(
+    "/teacher-availability/rules",
+    response_model=Page[TeacherAvailabilityRuleRead],
+)
+async def list_teacher_availability_rules(
+    session: DBSession,
+    pagination: Pagination,
+    teacher_id: TeacherIdQuery = None,
+) -> Page[TeacherAvailabilityRuleRead]:
+    return await AdminService(session).list_teacher_availability_rules(
+        pagination,
+        teacher_id=teacher_id,
+    )
+
+
+@router.post(
+    "/teacher-availability/rules",
+    response_model=TeacherAvailabilityRuleRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_teacher_availability_rule(
+    rule_in: TeacherAvailabilityRuleCreate,
+    session: DBSession,
+) -> TeacherAvailabilityRuleRead:
+    return await AdminService(session).create_teacher_availability_rule(rule_in)
+
+
+@router.get(
+    "/teacher-availability/rules/{rule_id}",
+    response_model=TeacherAvailabilityRuleRead,
+)
+async def get_teacher_availability_rule(
+    rule_id: UUID,
+    session: DBSession,
+) -> TeacherAvailabilityRuleRead:
+    return await AdminService(session).get_teacher_availability_rule(rule_id)
+
+
+@router.patch(
+    "/teacher-availability/rules/{rule_id}",
+    response_model=TeacherAvailabilityRuleRead,
+)
+async def update_teacher_availability_rule(
+    rule_id: UUID,
+    rule_in: TeacherAvailabilityRuleUpdate,
+    session: DBSession,
+) -> TeacherAvailabilityRuleRead:
+    return await AdminService(session).update_teacher_availability_rule(rule_id, rule_in)
+
+
+@router.delete(
+    "/teacher-availability/rules/{rule_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_teacher_availability_rule(
+    rule_id: UUID,
+    session: DBSession,
+) -> Response:
+    await AdminService(session).delete_teacher_availability_rule(rule_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/teacher-availability/slots",
+    response_model=Page[TeacherAvailabilitySlotRead],
+)
+async def list_teacher_availability_slots(
+    session: DBSession,
+    pagination: Pagination,
+    teacher_id: TeacherIdQuery = None,
+    starts_from: DatetimeQuery = None,
+    starts_to: DatetimeQuery = None,
+) -> Page[TeacherAvailabilitySlotRead]:
+    return await AdminService(session).list_teacher_availability_slots(
+        pagination,
+        teacher_id=teacher_id,
+        starts_from=normalize_query_datetime(starts_from),
+        starts_to=normalize_query_datetime(starts_to),
+    )
+
+
+@router.post(
+    "/teacher-availability/slots",
+    response_model=TeacherAvailabilitySlotRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_teacher_availability_slot(
+    slot_in: TeacherAvailabilitySlotCreate,
+    session: DBSession,
+) -> TeacherAvailabilitySlotRead:
+    return await AdminService(session).create_teacher_availability_slot(slot_in)
+
+
+@router.post(
+    "/teacher-availability/slots/bulk",
+    response_model=list[TeacherAvailabilitySlotRead],
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_teacher_availability_slots_bulk(
+    slots_in: TeacherAvailabilitySlotBulkCreate,
+    session: DBSession,
+) -> list[TeacherAvailabilitySlotRead]:
+    return await AdminService(session).create_teacher_availability_slots_bulk(slots_in)
+
+
+@router.post(
+    "/teacher-availability/blocks",
+    response_model=TeacherAvailabilitySlotRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_teacher_availability_block(
+    block_in: TeacherAvailabilityBlockCreate,
+    session: DBSession,
+) -> TeacherAvailabilitySlotRead:
+    return await AdminService(session).create_teacher_availability_block(block_in)
+
+
+@router.get(
+    "/teacher-availability/slots/{slot_id}",
+    response_model=TeacherAvailabilitySlotRead,
+)
+async def get_teacher_availability_slot(
+    slot_id: UUID,
+    session: DBSession,
+) -> TeacherAvailabilitySlotRead:
+    return await AdminService(session).get_teacher_availability_slot(slot_id)
+
+
+@router.patch(
+    "/teacher-availability/slots/{slot_id}",
+    response_model=TeacherAvailabilitySlotRead,
+)
+async def update_teacher_availability_slot(
+    slot_id: UUID,
+    slot_in: TeacherAvailabilitySlotUpdate,
+    session: DBSession,
+) -> TeacherAvailabilitySlotRead:
+    return await AdminService(session).update_teacher_availability_slot(slot_id, slot_in)
+
+
+@router.delete(
+    "/teacher-availability/slots/{slot_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_teacher_availability_slot(
+    slot_id: UUID,
+    session: DBSession,
+) -> Response:
+    await AdminService(session).delete_teacher_availability_slot(slot_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post("/students", response_model=AdminStudentRead, status_code=status.HTTP_201_CREATED)
 async def create_student(
     student_in: AdminStudentCreate,
@@ -195,6 +383,36 @@ async def create_student_payment(
     session: DBSession,
 ) -> AdminStudentPaymentRead:
     return await AdminService(session).create_student_payment(student_id, payment_in)
+
+
+@router.patch(
+    "/students/{student_id}/payments/{payment_id}",
+    response_model=AdminStudentPaymentRead,
+)
+async def update_student_payment(
+    student_id: UUID,
+    payment_id: UUID,
+    payment_in: AdminStudentPaymentUpdate,
+    session: DBSession,
+) -> AdminStudentPaymentRead:
+    return await AdminService(session).update_student_payment(
+        student_id,
+        payment_id,
+        payment_in,
+    )
+
+
+@router.delete(
+    "/students/{student_id}/payments/{payment_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_student_payment(
+    student_id: UUID,
+    payment_id: UUID,
+    session: DBSession,
+) -> Response:
+    await AdminService(session).delete_student_payment(student_id, payment_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get(
@@ -275,6 +493,23 @@ async def get_batch_group(
     return await AdminService(session).get_batch_group(batch_group_id)
 
 
+@router.patch("/batch-groups/{batch_group_id}", response_model=BatchGroupRead)
+async def update_batch_group(
+    batch_group_id: UUID,
+    batch_group_in: BatchGroupUpdate,
+    session: DBSession,
+) -> BatchGroupRead:
+    return await AdminService(session).update_batch_group(batch_group_id, batch_group_in)
+
+
+@router.post("/batch-groups/{batch_group_id}/void", response_model=BatchGroupRead)
+async def void_batch_group(
+    batch_group_id: UUID,
+    session: DBSession,
+) -> BatchGroupRead:
+    return await AdminService(session).void_batch_group(batch_group_id)
+
+
 @router.get(
     "/batch-groups/{batch_group_id}/students",
     response_model=Page[StudentBatchMembershipRead],
@@ -317,6 +552,14 @@ async def update_package(
     return await AdminService(session).update_package(package_id, package_in)
 
 
+@router.post("/packages/{package_id}/void", response_model=PackageRead)
+async def void_package(
+    package_id: UUID,
+    session: DBSession,
+) -> PackageRead:
+    return await AdminService(session).void_package(package_id)
+
+
 @router.get("/classes", response_model=Page[ClassSessionRead])
 async def list_classes(
     session: DBSession,
@@ -345,6 +588,15 @@ async def get_class_session(
     session: DBSession,
 ) -> ClassSessionRead:
     return await AdminService(session).get_class_session(class_session_id)
+
+
+@router.post("/classes/{class_session_id}/cancel", response_model=ClassSessionRead)
+async def cancel_class_session(
+    class_session_id: UUID,
+    cancel_in: BookingActionRequest,
+    session: DBSession,
+) -> ClassSessionRead:
+    return await AdminService(session).cancel_class_session(class_session_id, cancel_in)
 
 
 @router.get("/bookings", response_model=Page[BookingRead])

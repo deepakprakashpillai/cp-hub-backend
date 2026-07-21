@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -6,11 +7,37 @@ from pydantic import ValidationError
 
 from app.core.exceptions import BadRequestError, ConflictError
 from app.modules.bookings.models import Booking
-from app.modules.bookings.schemas import BookingAttendanceMark, ClassAttendanceMark
+from app.modules.bookings.schemas import (
+    BookingActionRequest,
+    BookingAttendanceMark,
+    ClassAttendanceMark,
+)
 from app.modules.bookings.service import BookingService
 from app.modules.classes.models import ClassSession
+from app.modules.schedules.models import TeacherAvailabilitySlot
 from app.modules.students.models import Student
-from app.shared.enums import BookingStatus, ClassSessionStatus, StudentProgramType, StudentStatus
+from app.shared.enums import (
+    AvailabilitySlotSource,
+    AvailabilitySlotStatus,
+    BookingStatus,
+    ClassSessionStatus,
+    StudentProgramType,
+    StudentStatus,
+)
+
+
+class FakeSession:
+    def __init__(self, bookings=None, slot=None) -> None:
+        self.bookings = bookings or []
+        self.slot = slot
+        self.scalars = AsyncMock(return_value=self.bookings)
+        self.get = AsyncMock(return_value=slot)
+        self.commit = AsyncMock()
+        self.refresh = AsyncMock()
+        self.added = []
+
+    def add(self, value) -> None:
+        self.added.append(value)
 
 
 def test_student_can_book_when_active_and_access_window_is_current() -> None:
@@ -223,3 +250,65 @@ def test_cancelled_booking_cannot_be_marked_for_attendance() -> None:
             class_session=class_session,
             now=datetime(2026, 7, 20, 10, 0, tzinfo=UTC),
         )
+
+
+@pytest.mark.asyncio
+async def test_admin_class_cancel_cancels_booked_bookings_and_reopens_future_one_on_one_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class_session = ClassSession(
+        id=uuid4(),
+        teacher_id=uuid4(),
+        teacher_availability_slot_id=uuid4(),
+        program_type=StudentProgramType.ONE_ON_ONE,
+        starts_at=datetime(2026, 7, 23, 10, 0, tzinfo=UTC),
+        ends_at=datetime(2026, 7, 23, 11, 0, tzinfo=UTC),
+        status=ClassSessionStatus.SCHEDULED,
+        capacity=1,
+    )
+    booking = Booking(
+        id=uuid4(),
+        student_id=uuid4(),
+        class_session_id=class_session.id,
+        status=BookingStatus.BOOKED,
+    )
+    slot = TeacherAvailabilitySlot(
+        id=class_session.teacher_availability_slot_id,
+        teacher_id=class_session.teacher_id,
+        rule_id=None,
+        source=AvailabilitySlotSource.MANUAL,
+        starts_at=class_session.starts_at,
+        ends_at=class_session.ends_at,
+        status=AvailabilitySlotStatus.BOOKED,
+    )
+    session = FakeSession(bookings=[booking], slot=slot)
+    service = BookingService(session)
+
+    async def fake_get_class_session_for_update(self, class_session_id):
+        assert class_session_id == class_session.id
+        return class_session
+
+    monkeypatch.setattr(
+        BookingService,
+        "_get_class_session_for_update",
+        fake_get_class_session_for_update,
+    )
+    monkeypatch.setattr(
+        "app.modules.bookings.service.utc_now",
+        lambda: datetime(2026, 7, 22, tzinfo=UTC),
+    )
+
+    result = await service.admin_cancel_class_session(
+        class_session.id,
+        BookingActionRequest(reason="teacher unavailable"),
+    )
+
+    assert result is class_session
+    assert class_session.status == ClassSessionStatus.CANCELLED
+    assert booking.status == BookingStatus.CANCELLED
+    assert slot.status == AvailabilitySlotStatus.AVAILABLE
+    assert len(session.added) == 1
+    assert session.added[0].booking_id == booking.id
+    assert session.added[0].reason == "teacher unavailable"
+    session.commit.assert_awaited_once()
+    session.refresh.assert_awaited_once_with(class_session)

@@ -42,6 +42,7 @@ EMPTY_CLASS_REASON = "empty class"
 ATTENDED_REASON = "present"
 MISSED_REASON = "absent"
 MANUAL_ADD_REASON = "manually added by admin"
+CLASS_CANCEL_REASON = "class cancelled by admin"
 
 
 class BookingService:
@@ -146,6 +147,56 @@ class BookingService:
             enforce_student_cutoff=False,
             commit=True,
         )
+
+    async def admin_cancel_class_session(
+        self,
+        class_session_id: UUID,
+        cancel_in: BookingActionRequest,
+    ) -> ClassSession:
+        await self._get_optional_user(cancel_in.actor_user_id)
+        class_session = await self._get_class_session_for_update(class_session_id)
+        if class_session.status == ClassSessionStatus.CANCELLED:
+            raise ConflictError("Class session is already cancelled")
+        if class_session.status == ClassSessionStatus.COMPLETED:
+            raise ConflictError("Completed class sessions cannot be cancelled")
+
+        now = utc_now()
+        reason = cancel_in.reason or CLASS_CANCEL_REASON
+        class_session.status = ClassSessionStatus.CANCELLED
+
+        result = await self.session.scalars(
+            select(Booking)
+            .where(
+                Booking.class_session_id == class_session.id,
+                Booking.status == BookingStatus.BOOKED,
+            )
+            .with_for_update()
+        )
+        for booking in result:
+            booking.status = BookingStatus.CANCELLED
+            self._add_booking_event(
+                booking_id=booking.id,
+                event_type=BookingEventType.CANCELLED_BY_ADMIN,
+                actor_user_id=cancel_in.actor_user_id,
+                reason=reason,
+                event_metadata={"class_session_id": str(class_session.id)},
+            )
+
+        if (
+            class_session.program_type == StudentProgramType.ONE_ON_ONE
+            and _normalize_utc_datetime(class_session.starts_at) > now
+            and class_session.teacher_availability_slot_id is not None
+        ):
+            slot = await self.session.get(
+                TeacherAvailabilitySlot,
+                class_session.teacher_availability_slot_id,
+            )
+            if slot is not None and slot.status == AvailabilitySlotStatus.BOOKED:
+                slot.status = AvailabilitySlotStatus.AVAILABLE
+
+        await self.session.commit()
+        await self.session.refresh(class_session)
+        return class_session
 
     async def reschedule_one_on_one_booking(
         self,

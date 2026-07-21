@@ -1,4 +1,5 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -13,10 +14,15 @@ from app.modules.admin.schemas import (
     AdminStudentBatchGroupSet,
     AdminStudentCreate,
     AdminStudentPaymentCreate,
+    AdminStudentPaymentUpdate,
     AdminTeacherCreate,
 )
 from app.modules.admin.service import AdminService
-from app.modules.batch_groups.schemas import BatchSessionBulkGenerate, StudentBatchTransfer
+from app.modules.batch_groups.schemas import (
+    BatchGroupUpdate,
+    BatchSessionBulkGenerate,
+    StudentBatchTransfer,
+)
 from app.modules.batch_groups.service import BatchGroupService
 from app.modules.bookings.schemas import (
     AdminAddStudentToClass,
@@ -31,6 +37,15 @@ from app.modules.classes.schemas import BatchClassSessionCreate
 from app.modules.classes.service import ClassSessionService
 from app.modules.packages.schemas import PackageUpdate
 from app.modules.packages.service import PackageService
+from app.modules.schedules.schemas import (
+    TeacherAvailabilityBlockCreate,
+    TeacherAvailabilityRuleCreate,
+    TeacherAvailabilityRuleUpdate,
+    TeacherAvailabilitySlotBulkCreate,
+    TeacherAvailabilitySlotCreate,
+    TeacherAvailabilitySlotUpdate,
+)
+from app.modules.schedules.service import ScheduleService
 from app.modules.student_access_grants.service import StudentAccessGrantService
 from app.modules.student_payments.service import StudentPaymentService
 from app.modules.students.models import Student
@@ -43,6 +58,8 @@ from app.modules.users.models import User
 from app.modules.users.schemas import UserUpdate
 from app.modules.users.service import UserService
 from app.shared.enums import (
+    AvailabilitySlotSource,
+    AvailabilitySlotStatus,
     BatchSlot,
     BookingStatus,
     ClassSessionStatus,
@@ -406,6 +423,210 @@ async def test_admin_teacher_update_returns_nested_user_data(
 
 
 @pytest.mark.asyncio
+async def test_admin_teacher_schedule_aliases_delegate_to_schedule_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    pagination = PaginationParams(page=1, page_size=25)
+    teacher_id = uuid4()
+    rule_id = uuid4()
+    slot_id = uuid4()
+    starts_from = datetime(2026, 7, 22, 8, 0, tzinfo=UTC)
+    starts_to = datetime(2026, 7, 22, 9, 0, tzinfo=UTC)
+    rule_in = TeacherAvailabilityRuleCreate(
+        teacher_id=teacher_id,
+        day_of_week=DayOfWeek.WEDNESDAY,
+        start_time_utc=time(8, 0),
+        end_time_utc=time(9, 0),
+        slot_duration_minutes=60,
+    )
+    slot_in = TeacherAvailabilitySlotCreate(
+        teacher_id=teacher_id,
+        rule_id=None,
+        source=AvailabilitySlotSource.MANUAL,
+        starts_at=starts_from,
+        ends_at=starts_to,
+        status=AvailabilitySlotStatus.AVAILABLE,
+    )
+    generation_result = SimpleNamespace(
+        rules_checked=1,
+        slots_created=2,
+        slots_cancelled=3,
+        slots_skipped=4,
+    )
+    calls = {}
+
+    async def fake_list_rules(self, received_pagination, teacher_id=None):
+        calls["list_rules"] = (received_pagination, teacher_id)
+        return object()
+
+    async def fake_create_rule(self, received_rule_in):
+        calls["create_rule"] = received_rule_in
+        return object()
+
+    async def fake_get_rule(self, received_rule_id):
+        calls["get_rule"] = received_rule_id
+        return object()
+
+    async def fake_update_rule(self, received_rule_id, received_rule_in):
+        calls["update_rule"] = (received_rule_id, received_rule_in)
+        return object()
+
+    async def fake_delete_rule(self, received_rule_id):
+        calls["delete_rule"] = received_rule_id
+
+    async def fake_list_slots(
+        self,
+        received_pagination,
+        teacher_id=None,
+        starts_from=None,
+        starts_to=None,
+    ):
+        calls["list_slots"] = (received_pagination, teacher_id, starts_from, starts_to)
+        return object()
+
+    async def fake_create_slot(self, received_slot_in):
+        calls["create_slot"] = received_slot_in
+        return object()
+
+    async def fake_create_slots_bulk(self, received_slots_in):
+        calls["bulk_slots"] = received_slots_in
+        return [object()]
+
+    async def fake_create_block(self, received_block_in):
+        calls["block"] = received_block_in
+        return object()
+
+    async def fake_get_slot(self, received_slot_id):
+        calls["get_slot"] = received_slot_id
+        return object()
+
+    async def fake_update_slot(self, received_slot_id, received_slot_in):
+        calls["update_slot"] = (received_slot_id, received_slot_in)
+        return object()
+
+    async def fake_delete_slot(self, received_slot_id):
+        calls["delete_slot"] = received_slot_id
+
+    async def fake_generate(self, received_teacher_id, *, days_ahead=14):
+        calls["generate"] = (received_teacher_id, days_ahead)
+        return generation_result
+
+    monkeypatch.setattr(
+        ScheduleService,
+        "list_teacher_availability_rules",
+        fake_list_rules,
+    )
+    monkeypatch.setattr(
+        ScheduleService,
+        "create_teacher_availability_rule",
+        fake_create_rule,
+    )
+    monkeypatch.setattr(
+        ScheduleService,
+        "get_teacher_availability_rule",
+        fake_get_rule,
+    )
+    monkeypatch.setattr(
+        ScheduleService,
+        "update_teacher_availability_rule",
+        fake_update_rule,
+    )
+    monkeypatch.setattr(
+        ScheduleService,
+        "delete_teacher_availability_rule",
+        fake_delete_rule,
+    )
+    monkeypatch.setattr(
+        ScheduleService,
+        "list_teacher_availability_slots",
+        fake_list_slots,
+    )
+    monkeypatch.setattr(
+        ScheduleService,
+        "create_teacher_availability_slot",
+        fake_create_slot,
+    )
+    monkeypatch.setattr(
+        ScheduleService,
+        "create_teacher_availability_slots_bulk",
+        fake_create_slots_bulk,
+    )
+    monkeypatch.setattr(
+        ScheduleService,
+        "create_teacher_availability_block",
+        fake_create_block,
+    )
+    monkeypatch.setattr(
+        ScheduleService,
+        "get_teacher_availability_slot",
+        fake_get_slot,
+    )
+    monkeypatch.setattr(
+        ScheduleService,
+        "update_teacher_availability_slot",
+        fake_update_slot,
+    )
+    monkeypatch.setattr(
+        ScheduleService,
+        "delete_teacher_availability_slot",
+        fake_delete_slot,
+    )
+    monkeypatch.setattr(
+        ScheduleService,
+        "generate_teacher_availability_slots",
+        fake_generate,
+    )
+
+    await AdminService(session).list_teacher_availability_rules(pagination, teacher_id=teacher_id)
+    await AdminService(session).create_teacher_availability_rule(rule_in)
+    await AdminService(session).get_teacher_availability_rule(rule_id)
+    rule_update_in = TeacherAvailabilityRuleUpdate(slot_duration_minutes=30)
+    await AdminService(session).update_teacher_availability_rule(rule_id, rule_update_in)
+    await AdminService(session).delete_teacher_availability_rule(rule_id)
+    await AdminService(session).list_teacher_availability_slots(
+        pagination,
+        teacher_id=teacher_id,
+        starts_from=starts_from,
+        starts_to=starts_to,
+    )
+    await AdminService(session).create_teacher_availability_slot(slot_in)
+    bulk_in = TeacherAvailabilitySlotBulkCreate(slots=[slot_in])
+    await AdminService(session).create_teacher_availability_slots_bulk(bulk_in)
+    block_in = TeacherAvailabilityBlockCreate(
+        teacher_id=teacher_id,
+        starts_at=starts_from + timedelta(hours=2),
+        ends_at=starts_to + timedelta(hours=2),
+    )
+    await AdminService(session).create_teacher_availability_block(block_in)
+    await AdminService(session).get_teacher_availability_slot(slot_id)
+    slot_update_in = TeacherAvailabilitySlotUpdate(status=AvailabilitySlotStatus.CANCELLED)
+    await AdminService(session).update_teacher_availability_slot(slot_id, slot_update_in)
+    await AdminService(session).delete_teacher_availability_slot(slot_id)
+    result = await AdminService(session).generate_teacher_availability_slots(
+        teacher_id,
+        days_ahead=30,
+    )
+
+    assert result is generation_result
+    assert calls == {
+        "list_rules": (pagination, teacher_id),
+        "create_rule": rule_in,
+        "get_rule": rule_id,
+        "update_rule": (rule_id, rule_update_in),
+        "delete_rule": rule_id,
+        "list_slots": (pagination, teacher_id, starts_from, starts_to),
+        "create_slot": slot_in,
+        "bulk_slots": bulk_in,
+        "block": block_in,
+        "get_slot": slot_id,
+        "update_slot": (slot_id, slot_update_in),
+        "delete_slot": slot_id,
+        "generate": (teacher_id, 30),
+    }
+
+
+@pytest.mark.asyncio
 async def test_admin_package_update_delegates_to_package_service(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -431,6 +652,27 @@ async def test_admin_package_update_delegates_to_package_service(
         "package_id": package_id,
         "package_in": PackageUpdate(name="Updated IELTS"),
     }
+
+
+@pytest.mark.asyncio
+async def test_admin_package_void_delegates_to_package_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    package_id = uuid4()
+    package = object()
+    calls = {}
+
+    async def fake_void_package(self, received_package_id):
+        calls["package_id"] = received_package_id
+        return package
+
+    monkeypatch.setattr(PackageService, "void_package", fake_void_package)
+
+    result = await AdminService(session).void_package(package_id)
+
+    assert result is package
+    assert calls == {"package_id": package_id}
 
 
 @pytest.mark.asyncio
@@ -626,6 +868,70 @@ async def test_admin_student_payment_uses_path_student_id(
         "student_id": student_id,
         "amount_paid": 50000,
         "payment_method": PaymentMethod.UPI,
+    }
+
+
+@pytest.mark.asyncio
+async def test_admin_student_payment_update_requires_path_student_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    student_id = uuid4()
+    payment_id = uuid4()
+    payment = type("Payment", (), {"student_id": student_id})()
+    updated_payment = object()
+    calls = {}
+
+    async def fake_get_payment(self, received_payment_id):
+        calls["get_payment_id"] = received_payment_id
+        return payment
+
+    async def fake_update_payment(self, received_payment_id, payment_in):
+        calls["update_payment_id"] = received_payment_id
+        calls["payment_in"] = payment_in
+        return updated_payment
+
+    monkeypatch.setattr(StudentPaymentService, "get_payment", fake_get_payment)
+    monkeypatch.setattr(StudentPaymentService, "update_payment", fake_update_payment)
+
+    result = await AdminService(session).update_student_payment(
+        student_id,
+        payment_id,
+        AdminStudentPaymentUpdate(amount_paid=60000),
+    )
+
+    assert result is updated_payment
+    assert calls["get_payment_id"] == payment_id
+    assert calls["update_payment_id"] == payment_id
+    assert calls["payment_in"].student_id is None
+    assert calls["payment_in"].amount_paid == 60000
+
+
+@pytest.mark.asyncio
+async def test_admin_student_payment_delete_requires_path_student_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    student_id = uuid4()
+    payment_id = uuid4()
+    payment = type("Payment", (), {"student_id": student_id})()
+    calls = {}
+
+    async def fake_get_payment(self, received_payment_id):
+        calls["get_payment_id"] = received_payment_id
+        return payment
+
+    async def fake_delete_payment(self, received_payment_id):
+        calls["delete_payment_id"] = received_payment_id
+
+    monkeypatch.setattr(StudentPaymentService, "get_payment", fake_get_payment)
+    monkeypatch.setattr(StudentPaymentService, "delete_payment", fake_delete_payment)
+
+    await AdminService(session).delete_student_payment(student_id, payment_id)
+
+    assert calls == {
+        "get_payment_id": payment_id,
+        "delete_payment_id": payment_id,
     }
 
 
@@ -842,6 +1148,40 @@ async def test_admin_class_list_delegates_with_filters(
 
 
 @pytest.mark.asyncio
+async def test_admin_batch_group_update_and_void_delegate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    batch_group_id = uuid4()
+    updated_group = object()
+    voided_group = object()
+    calls = {}
+
+    async def fake_update_batch_group(self, received_batch_group_id, batch_group_in):
+        calls["update_id"] = received_batch_group_id
+        calls["update_in"] = batch_group_in
+        return updated_group
+
+    async def fake_void_batch_group(self, received_batch_group_id):
+        calls["void_id"] = received_batch_group_id
+        return voided_group
+
+    monkeypatch.setattr(BatchGroupService, "update_batch_group", fake_update_batch_group)
+    monkeypatch.setattr(BatchGroupService, "void_batch_group", fake_void_batch_group)
+
+    update_in = BatchGroupUpdate(name="Updated Batch")
+    updated_result = await AdminService(session).update_batch_group(batch_group_id, update_in)
+
+    assert updated_result is updated_group
+    assert await AdminService(session).void_batch_group(batch_group_id) is voided_group
+    assert calls == {
+        "update_id": batch_group_id,
+        "update_in": update_in,
+        "void_id": batch_group_id,
+    }
+
+
+@pytest.mark.asyncio
 async def test_admin_add_student_to_class_delegates_to_admin_booking_method(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -896,6 +1236,36 @@ async def test_admin_class_attendance_delegates_to_booking_service(
     assert calls == {
         "class_session_id": class_session_id,
         "attendance_in": attendance_in,
+    }
+
+
+@pytest.mark.asyncio
+async def test_admin_class_cancel_delegates_to_booking_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    class_session_id = uuid4()
+    class_session = object()
+    calls = {}
+
+    async def fake_admin_cancel_class_session(self, received_class_session_id, cancel_in):
+        calls["class_session_id"] = received_class_session_id
+        calls["cancel_in"] = cancel_in
+        return class_session
+
+    monkeypatch.setattr(
+        BookingService,
+        "admin_cancel_class_session",
+        fake_admin_cancel_class_session,
+    )
+
+    cancel_in = BookingActionRequest(reason="teacher unavailable")
+    result = await AdminService(session).cancel_class_session(class_session_id, cancel_in)
+
+    assert result is class_session
+    assert calls == {
+        "class_session_id": class_session_id,
+        "cancel_in": cancel_in,
     }
 
 
