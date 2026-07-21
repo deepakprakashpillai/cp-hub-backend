@@ -24,7 +24,7 @@ class TeacherService:
             raise NotFoundError("Teacher not found")
         return teacher
 
-    async def create_teacher(self, teacher_in: TeacherCreate) -> Teacher:
+    async def create_teacher(self, teacher_in: TeacherCreate, *, commit: bool = True) -> Teacher:
         user = await self.session.get(User, teacher_in.user_id)
         if user is None:
             raise NotFoundError("User not found")
@@ -40,6 +40,9 @@ class TeacherService:
 
         teacher = Teacher(**teacher_in.model_dump())
         self.session.add(teacher)
-        await self.session.commit()
-        await self.session.refresh(teacher)
+        if commit:
+            await self.session.commit()
+            await self.session.refresh(teacher)
+        else:
+            await self.session.flush()
         return teacher

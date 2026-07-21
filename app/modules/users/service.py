@@ -22,13 +22,16 @@ class UserService:
             raise NotFoundError("User not found")
         return user
 
-    async def create_user(self, user_in: UserCreate) -> User:
+    async def create_user(self, user_in: UserCreate, *, commit: bool = True) -> User:
         existing_user = await self.session.scalar(select(User).where(User.email == user_in.email))
         if existing_user is not None:
             raise ConflictError("A user with this email already exists")
 
         user = User(**user_in.model_dump())
         self.session.add(user)
-        await self.session.commit()
-        await self.session.refresh(user)
+        if commit:
+            await self.session.commit()
+            await self.session.refresh(user)
+        else:
+            await self.session.flush()
         return user

@@ -26,7 +26,7 @@ class StudentService:
             raise NotFoundError("Student not found")
         return student
 
-    async def create_student(self, student_in: StudentCreate) -> Student:
+    async def create_student(self, student_in: StudentCreate, *, commit: bool = True) -> Student:
         user = await self.session.get(User, student_in.user_id)
         if user is None:
             raise NotFoundError("User not found")
@@ -48,8 +48,11 @@ class StudentService:
 
         student = Student(**student_in.model_dump())
         self.session.add(student)
-        await self.session.commit()
-        await self.session.refresh(student)
+        if commit:
+            await self.session.commit()
+            await self.session.refresh(student)
+        else:
+            await self.session.flush()
         return student
 
     async def update_student(self, student_id: UUID, student_in: StudentUpdate) -> Student:
