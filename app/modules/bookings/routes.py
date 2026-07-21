@@ -7,6 +7,7 @@ from app.modules.bookings.schemas import (
     BatchBookingCreate,
     BatchBookingReschedule,
     BookingActionRequest,
+    BookingAttendanceMark,
     BookingEventRead,
     BookingRead,
     OneOnOneBookingCreate,
@@ -121,6 +122,15 @@ async def list_booking_events(
     session: DBSession,
 ) -> list[BookingEventRead]:
     return await BookingService(session).list_booking_events(booking_id)
+
+
+@router.post("/{booking_id}/attendance", response_model=BookingRead)
+async def mark_booking_attendance(
+    booking_id: UUID,
+    attendance_in: BookingAttendanceMark,
+    session: DBSession,
+) -> BookingRead:
+    return await BookingService(session).mark_booking_attendance(booking_id, attendance_in)
 
 
 @router.get("/{booking_id}", response_model=BookingRead)

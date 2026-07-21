@@ -11,6 +11,8 @@ from app.modules.bookings.schemas import (
     BatchBookingCreate,
     BatchBookingReschedule,
     BookingActionRequest,
+    BookingAttendanceMark,
+    ClassAttendanceMark,
     OneOnOneBookingCreate,
     OneOnOneBookingReschedule,
 )
@@ -35,6 +37,8 @@ STUDENT_CANCEL_REASON = "cancelled by student"
 ADMIN_CANCEL_REASON = "cancelled by admin"
 RESCHEDULE_REASON = "rescheduled"
 EMPTY_CLASS_REASON = "empty class"
+ATTENDED_REASON = "present"
+MISSED_REASON = "absent"
 
 
 class BookingService:
@@ -165,6 +169,62 @@ class BookingService:
             reschedule_in=reschedule_in,
             enforce_student_cutoff=False,
         )
+
+    async def mark_booking_attendance(
+        self,
+        booking_id: UUID,
+        attendance_in: BookingAttendanceMark,
+    ) -> Booking:
+        await self._get_optional_user(attendance_in.actor_user_id)
+        booking = await self._get_booking_for_update(booking_id)
+        class_session = await self._get_class_session_for_update(booking.class_session_id)
+        now = utc_now()
+
+        await self._mark_booking_attendance(
+            booking=booking,
+            class_session=class_session,
+            status=attendance_in.status,
+            actor_user_id=attendance_in.actor_user_id,
+            reason=attendance_in.reason or _default_attendance_reason(attendance_in.status),
+            now=now,
+        )
+        await self._complete_class_session_if_attendance_marked(class_session)
+
+        await self.session.commit()
+        await self.session.refresh(booking)
+        return booking
+
+    async def mark_class_attendance(
+        self,
+        class_session_id: UUID,
+        attendance_in: ClassAttendanceMark,
+    ) -> list[Booking]:
+        await self._get_optional_user(attendance_in.actor_user_id)
+        class_session = await self._get_class_session_for_update(class_session_id)
+        now = utc_now()
+
+        bookings: list[Booking] = []
+        for record in attendance_in.records:
+            booking = await self._get_booking_for_update(record.booking_id)
+            if booking.class_session_id != class_session.id:
+                raise ConflictError("Attendance booking does not belong to this class session")
+
+            await self._mark_booking_attendance(
+                booking=booking,
+                class_session=class_session,
+                status=record.status,
+                actor_user_id=attendance_in.actor_user_id,
+                reason=record.reason or _default_attendance_reason(record.status),
+                now=now,
+            )
+            bookings.append(booking)
+
+        await self._complete_class_session_if_attendance_marked(class_session)
+
+        await self.session.commit()
+        for booking in bookings:
+            await self.session.refresh(booking)
+        return bookings
 
     async def _create_one_on_one_booking(
         self,
@@ -665,6 +725,76 @@ class BookingService:
                 event_metadata={"class_session_id": str(class_session.id)},
             )
 
+    async def _mark_booking_attendance(
+        self,
+        *,
+        booking: Booking,
+        class_session: ClassSession,
+        status: BookingStatus,
+        actor_user_id: UUID | None,
+        reason: str,
+        now: datetime,
+    ) -> None:
+        self._ensure_can_mark_attendance(
+            booking=booking,
+            class_session=class_session,
+            now=now,
+        )
+
+        old_status = booking.status
+        booking.status = status
+        self._add_booking_event(
+            booking_id=booking.id,
+            event_type=BookingEventType.ATTENDANCE_MARKED,
+            actor_user_id=actor_user_id,
+            reason=reason,
+            event_metadata={
+                "class_session_id": str(class_session.id),
+                "old_status": old_status.value,
+                "new_status": status.value,
+            },
+        )
+
+    def _ensure_can_mark_attendance(
+        self,
+        *,
+        booking: Booking,
+        class_session: ClassSession,
+        now: datetime,
+    ) -> None:
+        if booking.status == BookingStatus.CANCELLED:
+            raise ConflictError("Cancelled bookings cannot be marked for attendance")
+        if class_session.status == ClassSessionStatus.CANCELLED:
+            raise ConflictError("Cancelled class sessions cannot be marked for attendance")
+        if class_session.starts_at > now:
+            raise BadRequestError("Attendance can only be marked after class start")
+
+    async def _complete_class_session_if_attendance_marked(
+        self,
+        class_session: ClassSession,
+    ) -> None:
+        if class_session.status == ClassSessionStatus.CANCELLED:
+            return
+
+        active_booking_count = await self.session.scalar(
+            select(func.count())
+            .select_from(Booking)
+            .where(
+                Booking.class_session_id == class_session.id,
+                Booking.status != BookingStatus.CANCELLED,
+            )
+        )
+        unmarked_booking_count = await self.session.scalar(
+            select(func.count())
+            .select_from(Booking)
+            .where(
+                Booking.class_session_id == class_session.id,
+                Booking.status == BookingStatus.BOOKED,
+            )
+        )
+        if active_booking_count > 0 and unmarked_booking_count == 0:
+            class_session.status = ClassSessionStatus.COMPLETED
+
     def _add_booking_event(
         self,
         *,
@@ -689,3 +819,9 @@ def _normalize_utc_datetime(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _default_attendance_reason(status: BookingStatus) -> str:
+    if status == BookingStatus.ATTENDED:
+        return ATTENDED_REASON
+    return MISSED_REASON

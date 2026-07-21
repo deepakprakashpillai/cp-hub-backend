@@ -86,6 +86,7 @@ class BookingEventType(StrEnum):
     RESCHEDULED_FROM = "rescheduled_from"
     RESCHEDULED_TO = "rescheduled_to"
     CLASS_CANCELLED_EMPTY = "class_cancelled_empty"
+    ATTENDANCE_MARKED = "attendance_marked"
 
 
 class LeadStatus(StrEnum):
