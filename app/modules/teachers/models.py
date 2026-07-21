@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import Boolean, ForeignKey, String, Text, Uuid, true
+from sqlalchemy import Boolean, ForeignKey, Index, String, Text, Uuid, true
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -8,6 +8,14 @@ from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 class Teacher(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "teachers"
+    __table_args__ = (
+        Index(
+            "ix_teachers_display_name_trgm",
+            "display_name",
+            postgresql_using="gin",
+            postgresql_ops={"display_name": "gin_trgm_ops"},
+        ),
+    )
 
     user_id: Mapped[UUID] = mapped_column(
         Uuid,
@@ -21,6 +29,7 @@ class Teacher(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     profile_photo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean,
+        index=True,
         nullable=False,
         default=True,
         server_default=true(),

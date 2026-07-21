@@ -4,10 +4,12 @@ from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.dialects import postgresql
 
 from app.core.pagination import PaginationParams
 from app.modules.admin.schemas import (
     AdminStudentAccessGrantCreate,
+    AdminStudentAccessState,
     AdminStudentBatchGroupSet,
     AdminStudentCreate,
     AdminStudentPaymentCreate,
@@ -160,6 +162,45 @@ async def test_admin_student_list_returns_nested_user_data(
 
 
 @pytest.mark.asyncio
+async def test_admin_student_list_applies_search_and_filters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    pagination = PaginationParams(page=1, page_size=25)
+    batch_group_id = uuid4()
+    captured = {}
+
+    async def fake_paginate_rows(received_session, statement, received_pagination):
+        captured["sql"] = str(statement.compile(dialect=postgresql.dialect()))
+        assert received_session is session
+        assert received_pagination is pagination
+        return [], 0
+
+    monkeypatch.setattr("app.modules.admin.service.paginate_rows", fake_paginate_rows)
+
+    page = await AdminService(session).list_students(
+        pagination,
+        q=" deepak ",
+        status=StudentStatus.ACTIVE,
+        program_type=StudentProgramType.BATCH,
+        access_state=AdminStudentAccessState.VALID,
+        batch_group_id=batch_group_id,
+    )
+
+    sql = captured["sql"]
+    assert page.total == 0
+    assert "users.full_name ILIKE" in sql
+    assert "users.email ILIKE" in sql
+    assert "users.phone ILIKE" in sql
+    assert "students.status" in sql
+    assert "students.program_type" in sql
+    assert "students.access_starts_at" in sql
+    assert "students.access_ends_at" in sql
+    assert "EXISTS" in sql
+    assert "student_batch_memberships" in sql
+
+
+@pytest.mark.asyncio
 async def test_admin_teacher_list_returns_nested_user_data(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -195,6 +236,37 @@ async def test_admin_teacher_list_returns_nested_user_data(
     assert page.total == 1
     assert page.items[0].teacher.id == teacher.id
     assert page.items[0].user.full_name == "Teacher One"
+
+
+@pytest.mark.asyncio
+async def test_admin_teacher_list_applies_search_and_active_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    pagination = PaginationParams(page=1, page_size=25)
+    captured = {}
+
+    async def fake_paginate_rows(received_session, statement, received_pagination):
+        captured["sql"] = str(statement.compile(dialect=postgresql.dialect()))
+        assert received_session is session
+        assert received_pagination is pagination
+        return [], 0
+
+    monkeypatch.setattr("app.modules.admin.service.paginate_rows", fake_paginate_rows)
+
+    page = await AdminService(session).list_teachers(
+        pagination,
+        q=" teacher ",
+        is_active=False,
+    )
+
+    sql = captured["sql"]
+    assert page.total == 0
+    assert "teachers.display_name ILIKE" in sql
+    assert "users.full_name ILIKE" in sql
+    assert "users.email ILIKE" in sql
+    assert "users.phone ILIKE" in sql
+    assert "teachers.is_active IS false" in sql
 
 
 @pytest.mark.asyncio

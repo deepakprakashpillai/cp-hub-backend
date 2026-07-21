@@ -1,4 +1,5 @@
 from datetime import datetime
+from enum import StrEnum
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field, model_validator
@@ -20,6 +21,13 @@ from app.shared.enums import (
     StudentStatus,
 )
 from app.shared.utils import utc_now
+
+
+class AdminStudentAccessState(StrEnum):
+    VALID = "valid"
+    EXPIRED = "expired"
+    NOT_STARTED = "not_started"
+    NONE = "none"
 
 
 class AdminUserCreateFields(BaseModel):

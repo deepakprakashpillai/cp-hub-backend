@@ -10,6 +10,7 @@ from app.modules.admin.schemas import (
     AdminDashboardSummaryRead,
     AdminStudentAccessGrantCreate,
     AdminStudentAccessGrantRead,
+    AdminStudentAccessState,
     AdminStudentBatchGroupSet,
     AdminStudentCreate,
     AdminStudentPaymentCreate,
@@ -37,12 +38,15 @@ from app.modules.bookings.schemas import (
 from app.modules.classes.schemas import BatchClassSessionCreate, ClassSessionRead
 from app.modules.packages.schemas import PackageRead
 from app.modules.students.schemas import StudentProgramChangeRead, StudentProgramSwitch
-from app.shared.enums import StudentProgramType
+from app.shared.enums import StudentProgramType, StudentStatus
 
 router = APIRouter()
 DatetimeQuery = Annotated[datetime | None, Query()]
 ProgramTypeQuery = Annotated[StudentProgramType | None, Query()]
 IsActiveQuery = Annotated[bool | None, Query()]
+SearchQuery = Annotated[str | None, Query(max_length=150)]
+StudentStatusQuery = Annotated[StudentStatus | None, Query()]
+StudentAccessStateQuery = Annotated[AdminStudentAccessState | None, Query()]
 
 
 def normalize_query_datetime(value: datetime | None) -> datetime | None:
@@ -72,8 +76,20 @@ async def get_dashboard_summary(
 async def list_students(
     session: DBSession,
     pagination: Pagination,
+    q: SearchQuery = None,
+    status: StudentStatusQuery = None,
+    program_type: ProgramTypeQuery = None,
+    access_state: StudentAccessStateQuery = None,
+    batch_group_id: UUID | None = None,
 ) -> Page[AdminStudentRead]:
-    return await AdminService(session).list_students(pagination)
+    return await AdminService(session).list_students(
+        pagination,
+        q=q,
+        status=status,
+        program_type=program_type,
+        access_state=access_state,
+        batch_group_id=batch_group_id,
+    )
 
 
 @router.post("/teachers", response_model=AdminTeacherRead, status_code=status.HTTP_201_CREATED)
@@ -89,8 +105,14 @@ async def create_teacher(
 async def list_teachers(
     session: DBSession,
     pagination: Pagination,
+    q: SearchQuery = None,
+    is_active: IsActiveQuery = None,
 ) -> Page[AdminTeacherRead]:
-    return await AdminService(session).list_teachers(pagination)
+    return await AdminService(session).list_teachers(
+        pagination,
+        q=q,
+        is_active=is_active,
+    )
 
 
 @router.get("/teachers/{teacher_id}", response_model=AdminTeacherRead)

@@ -25,6 +25,7 @@ class Student(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             values_callable=enum_values,
             validate_strings=True,
         ),
+        index=True,
         nullable=False,
     )
     status: Mapped[StudentStatus] = mapped_column(
@@ -34,16 +35,19 @@ class Student(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             values_callable=enum_values,
             validate_strings=True,
         ),
+        index=True,
         nullable=False,
         default=StudentStatus.ENROLLED,
         server_default=StudentStatus.ENROLLED.value,
     )
     access_starts_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
+        index=True,
         nullable=True,
     )
     access_ends_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
+        index=True,
         nullable=True,
     )
     joined_at: Mapped[datetime] = mapped_column(

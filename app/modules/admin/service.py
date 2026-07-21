@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, time, timedelta
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.pagination import Page, PaginationParams, paginate_rows
@@ -15,6 +15,7 @@ from app.modules.admin.schemas import (
     AdminDashboardTeacherSummary,
     AdminDashboardWindowRead,
     AdminStudentAccessGrantCreate,
+    AdminStudentAccessState,
     AdminStudentBatchGroupSet,
     AdminStudentCreate,
     AdminStudentPaymentCreate,
@@ -122,12 +123,43 @@ class AdminService:
         await self.session.refresh(student)
         return user, student
 
-    async def list_students(self, pagination: PaginationParams) -> Page[AdminStudentRead]:
+    async def list_students(
+        self,
+        pagination: PaginationParams,
+        q: str | None = None,
+        status: StudentStatus | None = None,
+        program_type: StudentProgramType | None = None,
+        access_state: AdminStudentAccessState | None = None,
+        batch_group_id: UUID | None = None,
+    ) -> Page[AdminStudentRead]:
         statement = (
             select(Student, User)
             .join(User, Student.user_id == User.id)
             .order_by(Student.created_at.desc())
         )
+        q = _normalize_search_query(q)
+        if q is not None:
+            pattern = f"%{q}%"
+            statement = statement.where(
+                or_(
+                    User.full_name.ilike(pattern),
+                    User.email.ilike(pattern),
+                    User.phone.ilike(pattern),
+                )
+            )
+        if status is not None:
+            statement = statement.where(Student.status == status)
+        if program_type is not None:
+            statement = statement.where(Student.program_type == program_type)
+        if access_state is not None:
+            statement = statement.where(_student_access_state_clause(access_state, utc_now()))
+        if batch_group_id is not None:
+            statement = statement.where(
+                exists()
+                .where(StudentBatchMembership.student_id == Student.id)
+                .where(StudentBatchMembership.batch_group_id == batch_group_id)
+                .where(StudentBatchMembership.is_active.is_(True))
+            )
         rows, total = await paginate_rows(self.session, statement, pagination)
         return Page(
             items=[AdminStudentRead(student=student, user=user) for student, user in rows],
@@ -141,12 +173,30 @@ class AdminService:
         user = await UserService(self.session).get_user(student.user_id)
         return AdminStudentRead(student=student, user=user)
 
-    async def list_teachers(self, pagination: PaginationParams) -> Page[AdminTeacherRead]:
+    async def list_teachers(
+        self,
+        pagination: PaginationParams,
+        q: str | None = None,
+        is_active: bool | None = None,
+    ) -> Page[AdminTeacherRead]:
         statement = (
             select(Teacher, User)
             .join(User, Teacher.user_id == User.id)
             .order_by(Teacher.created_at.desc())
         )
+        q = _normalize_search_query(q)
+        if q is not None:
+            pattern = f"%{q}%"
+            statement = statement.where(
+                or_(
+                    Teacher.display_name.ilike(pattern),
+                    User.full_name.ilike(pattern),
+                    User.email.ilike(pattern),
+                    User.phone.ilike(pattern),
+                )
+            )
+        if is_active is not None:
+            statement = statement.where(Teacher.is_active.is_(is_active))
         rows, total = await paginate_rows(self.session, statement, pagination)
         return Page(
             items=[AdminTeacherRead(teacher=teacher, user=user) for teacher, user in rows],
@@ -507,3 +557,25 @@ def _resolve_dashboard_window(
     if starts_from >= starts_to:
         raise ValueError("starts_from must be before starts_to")
     return starts_from, starts_to
+
+
+def _normalize_search_query(q: str | None) -> str | None:
+    if q is None:
+        return None
+    normalized = q.strip()
+    return normalized or None
+
+
+def _student_access_state_clause(access_state: AdminStudentAccessState, now: datetime):
+    if access_state == AdminStudentAccessState.VALID:
+        return (
+            Student.access_starts_at.is_not(None)
+            & (Student.access_starts_at <= now)
+            & Student.access_ends_at.is_not(None)
+            & (Student.access_ends_at > now)
+        )
+    if access_state == AdminStudentAccessState.EXPIRED:
+        return Student.access_ends_at.is_not(None) & (Student.access_ends_at <= now)
+    if access_state == AdminStudentAccessState.NOT_STARTED:
+        return Student.access_starts_at.is_not(None) & (Student.access_starts_at > now)
+    return or_(Student.access_starts_at.is_(None), Student.access_ends_at.is_(None))
