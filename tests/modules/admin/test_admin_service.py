@@ -1,12 +1,13 @@
 from datetime import UTC, datetime, time, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 from sqlalchemy.dialects import postgresql
 
+from app.core.exceptions import BadRequestError
 from app.core.pagination import PaginationParams
 from app.modules.admin.schemas import (
     AdminStudentAccessGrantCreate,
@@ -15,7 +16,11 @@ from app.modules.admin.schemas import (
     AdminStudentCreate,
     AdminStudentPaymentCreate,
     AdminStudentPaymentUpdate,
+    AdminStudentSortBy,
+    AdminStudentUpdate,
     AdminTeacherCreate,
+    AdminTeacherSortBy,
+    SortOrder,
 )
 from app.modules.admin.service import AdminService
 from app.modules.batch_groups.schemas import (
@@ -24,6 +29,7 @@ from app.modules.batch_groups.schemas import (
     StudentBatchTransfer,
 )
 from app.modules.batch_groups.service import BatchGroupService
+from app.modules.booking_notes.service import BookingNoteService
 from app.modules.bookings.schemas import (
     AdminAddStudentToClass,
     BatchBookingReschedule,
@@ -169,7 +175,9 @@ async def test_admin_student_list_returns_nested_user_data(
     async def fake_paginate_rows(received_session, statement, received_pagination):
         assert received_session is session
         assert received_pagination is pagination
-        return [(student, user)], 11
+        sql = str(statement.compile(dialect=postgresql.dialect()))
+        assert "students.created_at DESC NULLS LAST" in sql
+        return [(student, user, None, None)], 11
 
     monkeypatch.setattr("app.modules.admin.service.paginate_rows", fake_paginate_rows)
 
@@ -183,12 +191,261 @@ async def test_admin_student_list_returns_nested_user_data(
 
 
 @pytest.mark.asyncio
+async def test_admin_student_get_returns_assigned_teacher_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    student_user = User(
+        id=uuid4(),
+        full_name="Student One",
+        email="student@example.com",
+        role=UserRole.STUDENT,
+        is_active=True,
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+    teacher_user = User(
+        id=uuid4(),
+        full_name="Teacher One",
+        email="teacher@example.com",
+        role=UserRole.TEACHER,
+        is_active=True,
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+    teacher = Teacher(
+        id=uuid4(),
+        user_id=teacher_user.id,
+        display_name="Teacher One",
+        is_active=True,
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+    student = Student(
+        id=uuid4(),
+        user_id=student_user.id,
+        program_type=StudentProgramType.ONE_ON_ONE,
+        assigned_teacher_id=teacher.id,
+        status=StudentStatus.ENROLLED,
+        joined_at=timestamp(),
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+
+    async def fake_get_student(self, student_id):
+        assert student_id == student.id
+        return student
+
+    async def fake_get_teacher(self, teacher_id):
+        assert teacher_id == teacher.id
+        return teacher
+
+    async def fake_get_user(self, user_id):
+        return student_user if user_id == student_user.id else teacher_user
+
+    monkeypatch.setattr(StudentService, "get_student", fake_get_student)
+    monkeypatch.setattr(TeacherService, "get_teacher", fake_get_teacher)
+    monkeypatch.setattr(UserService, "get_user", fake_get_user)
+
+    result = await AdminService(session).get_student(student.id)
+
+    assert result.student.assigned_teacher_id == teacher.id
+    assert result.assigned_teacher is not None
+    assert result.assigned_teacher.teacher.id == teacher.id
+    assert result.assigned_teacher.user.full_name == "Teacher One"
+
+
+@pytest.mark.asyncio
+async def test_admin_student_update_assigns_active_teacher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    student_user = User(
+        id=uuid4(),
+        full_name="Student One",
+        email="student@example.com",
+        role=UserRole.STUDENT,
+        is_active=True,
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+    teacher_user = User(
+        id=uuid4(),
+        full_name="Teacher One",
+        email="teacher@example.com",
+        role=UserRole.TEACHER,
+        is_active=True,
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+    teacher = Teacher(
+        id=uuid4(),
+        user_id=teacher_user.id,
+        display_name="Teacher One",
+        is_active=True,
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+    student = Student(
+        id=uuid4(),
+        user_id=student_user.id,
+        program_type=StudentProgramType.ONE_ON_ONE,
+        status=StudentStatus.ENROLLED,
+        joined_at=timestamp(),
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+    assigned_ids = []
+
+    async def fake_get_student(self, student_id):
+        return student
+
+    async def fake_get_teacher(self, teacher_id):
+        return teacher
+
+    async def fake_set_assigned_teacher(self, student_id, assigned_teacher_id):
+        assigned_ids.append(assigned_teacher_id)
+        student.assigned_teacher_id = assigned_teacher_id
+        return student
+
+    async def fake_get_user(self, user_id):
+        return student_user if user_id == student_user.id else teacher_user
+
+    monkeypatch.setattr(StudentService, "get_student", fake_get_student)
+    monkeypatch.setattr(StudentService, "set_assigned_teacher", fake_set_assigned_teacher)
+    monkeypatch.setattr(TeacherService, "get_teacher", fake_get_teacher)
+    monkeypatch.setattr(UserService, "get_user", fake_get_user)
+
+    result = await AdminService(session).update_student(
+        student.id,
+        AdminStudentUpdate(assigned_teacher_id=teacher.id),
+    )
+
+    assert assigned_ids == [teacher.id]
+    assert result.assigned_teacher is not None
+    assert result.assigned_teacher.teacher.id == teacher.id
+
+
+@pytest.mark.asyncio
+async def test_admin_student_update_rejects_teacher_for_batch_student(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    student = Student(
+        id=uuid4(),
+        user_id=uuid4(),
+        program_type=StudentProgramType.BATCH,
+        status=StudentStatus.ENROLLED,
+        joined_at=timestamp(),
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+
+    async def fake_get_student(self, student_id):
+        return student
+
+    monkeypatch.setattr(StudentService, "get_student", fake_get_student)
+
+    with pytest.raises(BadRequestError, match="only valid for one-on-one"):
+        await AdminService(session).update_student(
+            student.id,
+            AdminStudentUpdate(assigned_teacher_id=uuid4()),
+        )
+
+
+@pytest.mark.asyncio
+async def test_student_assigned_teacher_can_be_cleared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    student = Student(
+        id=uuid4(),
+        user_id=uuid4(),
+        program_type=StudentProgramType.ONE_ON_ONE,
+        assigned_teacher_id=uuid4(),
+        status=StudentStatus.ENROLLED,
+        joined_at=timestamp(),
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+
+    async def fake_get_student(self, student_id):
+        return student
+
+    monkeypatch.setattr(StudentService, "get_student", fake_get_student)
+
+    updated = await StudentService(session).set_assigned_teacher(student.id, None)
+
+    assert updated.assigned_teacher_id is None
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_student_assigned_teacher_must_be_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    student = Student(
+        id=uuid4(),
+        user_id=uuid4(),
+        program_type=StudentProgramType.ONE_ON_ONE,
+        status=StudentStatus.ENROLLED,
+        joined_at=timestamp(),
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+    teacher = Teacher(
+        id=uuid4(),
+        user_id=uuid4(),
+        display_name="Inactive Teacher",
+        is_active=False,
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+    session.get = AsyncMock(return_value=teacher)
+
+    async def fake_get_student(self, student_id):
+        return student
+
+    monkeypatch.setattr(StudentService, "get_student", fake_get_student)
+
+    with pytest.raises(BadRequestError, match="must be active"):
+        await StudentService(session).set_assigned_teacher(student.id, teacher.id)
+
+
+@pytest.mark.asyncio
+async def test_admin_student_list_sorts_by_name_ascending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    pagination = PaginationParams(page=1, page_size=25)
+    captured = {}
+
+    async def fake_paginate_rows(received_session, statement, received_pagination):
+        captured["sql"] = str(statement.compile(dialect=postgresql.dialect()))
+        assert received_session is session
+        assert received_pagination is pagination
+        return [], 0
+
+    monkeypatch.setattr("app.modules.admin.service.paginate_rows", fake_paginate_rows)
+
+    await AdminService(session).list_students(
+        pagination,
+        sort_by=AdminStudentSortBy.NAME,
+        sort_order=SortOrder.ASC,
+    )
+
+    assert "users.full_name ASC NULLS LAST" in captured["sql"]
+
+
+@pytest.mark.asyncio
 async def test_admin_student_list_applies_search_and_filters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = FakeSession()
     pagination = PaginationParams(page=1, page_size=25)
     batch_group_id = uuid4()
+    assigned_teacher_id = uuid4()
     captured = {}
 
     async def fake_paginate_rows(received_session, statement, received_pagination):
@@ -206,6 +463,7 @@ async def test_admin_student_list_applies_search_and_filters(
         program_type=StudentProgramType.BATCH,
         access_state=AdminStudentAccessState.VALID,
         batch_group_id=batch_group_id,
+        assigned_teacher_id=assigned_teacher_id,
     )
 
     sql = captured["sql"]
@@ -219,6 +477,7 @@ async def test_admin_student_list_applies_search_and_filters(
     assert "students.access_ends_at" in sql
     assert "EXISTS" in sql
     assert "student_batch_memberships" in sql
+    assert "students.assigned_teacher_id =" in sql
 
 
 @pytest.mark.asyncio
@@ -248,6 +507,9 @@ async def test_admin_teacher_list_returns_nested_user_data(
     async def fake_paginate_rows(received_session, statement, received_pagination):
         assert received_session is session
         assert received_pagination is pagination
+        sql = str(statement.compile(dialect=postgresql.dialect()))
+        assert "teachers.created_at DESC NULLS LAST" in sql
+        assert "teachers.id ASC" in sql
         return [(teacher, user)], 1
 
     monkeypatch.setattr("app.modules.admin.service.paginate_rows", fake_paginate_rows)
@@ -260,7 +522,7 @@ async def test_admin_teacher_list_returns_nested_user_data(
 
 
 @pytest.mark.asyncio
-async def test_admin_teacher_list_applies_search_and_active_filter(
+async def test_admin_teacher_list_applies_search_and_independent_active_filters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = FakeSession()
@@ -279,6 +541,7 @@ async def test_admin_teacher_list_applies_search_and_active_filter(
         pagination,
         q=" teacher ",
         is_active=False,
+        account_is_active=True,
     )
 
     sql = captured["sql"]
@@ -288,6 +551,79 @@ async def test_admin_teacher_list_applies_search_and_active_filter(
     assert "users.email ILIKE" in sql
     assert "users.phone ILIKE" in sql
     assert "teachers.is_active IS false" in sql
+    assert "users.is_active IS true" in sql
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("sort_by", "sort_order", "expected_order"),
+    [
+        (
+            AdminTeacherSortBy.CREATED_AT,
+            SortOrder.ASC,
+            "teachers.created_at ASC NULLS LAST",
+        ),
+        (
+            AdminTeacherSortBy.CREATED_AT,
+            SortOrder.DESC,
+            "teachers.created_at DESC NULLS LAST",
+        ),
+        (
+            AdminTeacherSortBy.NAME,
+            SortOrder.ASC,
+            "users.full_name ASC NULLS LAST",
+        ),
+        (
+            AdminTeacherSortBy.NAME,
+            SortOrder.DESC,
+            "users.full_name DESC NULLS LAST",
+        ),
+        (
+            AdminTeacherSortBy.DISPLAY_NAME,
+            SortOrder.ASC,
+            "teachers.display_name ASC NULLS LAST",
+        ),
+        (
+            AdminTeacherSortBy.DISPLAY_NAME,
+            SortOrder.DESC,
+            "teachers.display_name DESC NULLS LAST",
+        ),
+        (
+            AdminTeacherSortBy.IS_ACTIVE,
+            SortOrder.ASC,
+            "teachers.is_active ASC NULLS LAST",
+        ),
+        (
+            AdminTeacherSortBy.IS_ACTIVE,
+            SortOrder.DESC,
+            "teachers.is_active DESC NULLS LAST",
+        ),
+    ],
+)
+async def test_admin_teacher_list_supports_whitelisted_sorting(
+    monkeypatch: pytest.MonkeyPatch,
+    sort_by: AdminTeacherSortBy,
+    sort_order: SortOrder,
+    expected_order: str,
+) -> None:
+    session = FakeSession()
+    pagination = PaginationParams(page=1, page_size=25)
+    captured = {}
+
+    async def fake_paginate_rows(received_session, statement, received_pagination):
+        captured["sql"] = str(statement.compile(dialect=postgresql.dialect()))
+        return [], 0
+
+    monkeypatch.setattr("app.modules.admin.service.paginate_rows", fake_paginate_rows)
+
+    await AdminService(session).list_teachers(
+        pagination,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+
+    assert expected_order in captured["sql"]
+    assert "teachers.id ASC" in captured["sql"]
 
 
 @pytest.mark.asyncio
@@ -423,6 +759,77 @@ async def test_admin_teacher_update_returns_nested_user_data(
 
 
 @pytest.mark.asyncio
+async def test_student_program_switch_to_batch_clears_assigned_teacher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    session.add = Mock()
+    student = Student(
+        id=uuid4(),
+        user_id=uuid4(),
+        program_type=StudentProgramType.ONE_ON_ONE,
+        assigned_teacher_id=uuid4(),
+        status=StudentStatus.ENROLLED,
+        joined_at=timestamp(),
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+
+    async def fake_get_student(self, student_id):
+        return student
+
+    async def fake_cancel_future_bookings(self, **kwargs):
+        return 0
+
+    monkeypatch.setattr(StudentService, "get_student", fake_get_student)
+    monkeypatch.setattr(
+        BookingService,
+        "cancel_future_bookings_for_student",
+        fake_cancel_future_bookings,
+    )
+
+    await StudentService(session).switch_program(
+        student.id,
+        StudentProgramSwitch(new_program_type=StudentProgramType.BATCH),
+    )
+
+    assert student.program_type == StudentProgramType.BATCH
+    assert student.assigned_teacher_id is None
+
+
+@pytest.mark.asyncio
+async def test_teacher_deactivation_clears_student_assignments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    session.execute = AsyncMock()
+    teacher = Teacher(
+        id=uuid4(),
+        user_id=uuid4(),
+        display_name="Teacher One",
+        is_active=True,
+        created_at=timestamp(),
+        updated_at=timestamp(),
+    )
+
+    async def fake_get_teacher(self, teacher_id):
+        return teacher
+
+    monkeypatch.setattr(TeacherService, "get_teacher", fake_get_teacher)
+
+    await TeacherService(session).update_teacher(
+        teacher.id,
+        TeacherUpdate(is_active=False),
+    )
+
+    statement = session.execute.await_args.args[0]
+    sql = str(statement.compile(dialect=postgresql.dialect()))
+    assert "UPDATE students SET assigned_teacher_id=" in sql
+    assert "students.assigned_teacher_id =" in sql
+    assert teacher.is_active is False
+
+
+@pytest.mark.asyncio
 async def test_admin_teacher_schedule_aliases_delegate_to_schedule_service(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -481,8 +888,19 @@ async def test_admin_teacher_schedule_aliases_delegate_to_schedule_service(
         teacher_id=None,
         starts_from=None,
         starts_to=None,
+        status=None,
+        source=None,
+        descending=False,
     ):
-        calls["list_slots"] = (received_pagination, teacher_id, starts_from, starts_to)
+        calls["list_slots"] = (
+            received_pagination,
+            teacher_id,
+            starts_from,
+            starts_to,
+            status,
+            source,
+            descending,
+        )
         return object()
 
     async def fake_create_slot(self, received_slot_in):
@@ -589,6 +1007,9 @@ async def test_admin_teacher_schedule_aliases_delegate_to_schedule_service(
         teacher_id=teacher_id,
         starts_from=starts_from,
         starts_to=starts_to,
+        status=AvailabilitySlotStatus.BLOCKED,
+        source=AvailabilitySlotSource.MANUAL,
+        sort_order=SortOrder.DESC,
     )
     await AdminService(session).create_teacher_availability_slot(slot_in)
     bulk_in = TeacherAvailabilitySlotBulkCreate(slots=[slot_in])
@@ -615,7 +1036,15 @@ async def test_admin_teacher_schedule_aliases_delegate_to_schedule_service(
         "get_rule": rule_id,
         "update_rule": (rule_id, rule_update_in),
         "delete_rule": rule_id,
-        "list_slots": (pagination, teacher_id, starts_from, starts_to),
+        "list_slots": (
+            pagination,
+            teacher_id,
+            starts_from,
+            starts_to,
+            AvailabilitySlotStatus.BLOCKED,
+            AvailabilitySlotSource.MANUAL,
+            True,
+        ),
         "create_slot": slot_in,
         "bulk_slots": bulk_in,
         "block": block_in,
@@ -1035,6 +1464,40 @@ async def test_admin_student_program_switch_delegates_to_student_service(
 
 
 @pytest.mark.asyncio
+async def test_admin_booking_notes_delegates_to_booking_note_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    booking_id = uuid4()
+    pagination = PaginationParams(page=1, page_size=25)
+    expected = object()
+    calls = {}
+
+    async def fake_list_admin_booking_notes(
+        self,
+        received_booking_id,
+        received_pagination,
+    ):
+        calls["booking_id"] = received_booking_id
+        calls["pagination"] = received_pagination
+        return expected
+
+    monkeypatch.setattr(
+        BookingNoteService,
+        "list_admin_booking_notes",
+        fake_list_admin_booking_notes,
+    )
+
+    result = await AdminService(session).list_booking_notes(booking_id, pagination)
+
+    assert result is expected
+    assert calls == {
+        "booking_id": booking_id,
+        "pagination": pagination,
+    }
+
+
+@pytest.mark.asyncio
 async def test_admin_batch_session_generation_delegates_to_batch_group_service(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1108,20 +1571,20 @@ async def test_admin_class_list_delegates_with_filters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = FakeSession()
-    class_sessions = object()
     pagination = PaginationParams(page=1, page_size=25)
     starts_from = datetime(2026, 7, 22, 8, 0, tzinfo=UTC)
     starts_to = datetime(2026, 7, 22, 18, 0, tzinfo=UTC)
     teacher_id = uuid4()
     batch_group_id = uuid4()
-    calls = {}
+    captured = {}
 
-    async def fake_list_class_sessions(self, received_pagination, **filters):
-        calls["pagination"] = received_pagination
-        calls["filters"] = filters
-        return class_sessions
+    async def fake_paginate_rows(received_session, statement, received_pagination):
+        captured["sql"] = str(statement.compile(dialect=postgresql.dialect()))
+        assert received_session is session
+        assert received_pagination is pagination
+        return [], 0
 
-    monkeypatch.setattr(ClassSessionService, "list_class_sessions", fake_list_class_sessions)
+    monkeypatch.setattr("app.modules.admin.service.paginate_rows", fake_paginate_rows)
 
     result = await AdminService(session).list_class_sessions(
         pagination,
@@ -1131,20 +1594,19 @@ async def test_admin_class_list_delegates_with_filters(
         status=ClassSessionStatus.SCHEDULED,
         teacher_id=teacher_id,
         batch_group_id=batch_group_id,
+        sort_order=SortOrder.DESC,
     )
 
-    assert result is class_sessions
-    assert calls == {
-        "pagination": pagination,
-        "filters": {
-            "program_type": StudentProgramType.BATCH,
-            "starts_from": starts_from,
-            "starts_to": starts_to,
-            "status": ClassSessionStatus.SCHEDULED,
-            "teacher_id": teacher_id,
-            "batch_group_id": batch_group_id,
-        },
-    }
+    assert result.items == []
+    sql = captured["sql"]
+    assert "class_sessions.program_type =" in sql
+    assert "class_sessions.starts_at >=" in sql
+    assert "class_sessions.starts_at <=" in sql
+    assert "class_sessions.status =" in sql
+    assert "class_sessions.teacher_id =" in sql
+    assert "class_sessions.batch_group_id =" in sql
+    assert "class_sessions.starts_at DESC" in sql
+    assert "class_sessions.id ASC" in sql
 
 
 @pytest.mark.asyncio
@@ -1258,11 +1720,18 @@ async def test_admin_class_cancel_delegates_to_booking_service(
         "admin_cancel_class_session",
         fake_admin_cancel_class_session,
     )
+    projected_class = object()
+
+    async def fake_get_class_session(self, received_class_session_id):
+        assert received_class_session_id == class_session_id
+        return projected_class
+
+    monkeypatch.setattr(AdminService, "get_class_session", fake_get_class_session)
 
     cancel_in = BookingActionRequest(reason="teacher unavailable")
     result = await AdminService(session).cancel_class_session(class_session_id, cancel_in)
 
-    assert result is class_session
+    assert result is projected_class
     assert calls == {
         "class_session_id": class_session_id,
         "cancel_in": cancel_in,

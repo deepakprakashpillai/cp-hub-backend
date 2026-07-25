@@ -1,11 +1,20 @@
+from datetime import date
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Query, status
 
 from app.api.deps import DBSession, Pagination
 from app.core.pagination import Page
 from app.modules.batch_groups.schemas import StudentBatchMembershipRead, StudentBatchTransfer
 from app.modules.batch_groups.service import BatchGroupService
+from app.modules.batch_schedule_days.schemas import (
+    BatchDayAllocationResult,
+    BatchDayStudentSelection,
+    StudentBatchScheduleDayRead,
+)
+from app.modules.batch_schedule_days.service import BatchScheduleDayService
+from app.modules.bookings.service import BookingService
 from app.modules.students.schemas import (
     StudentCreate,
     StudentProgramChangeRead,
@@ -16,6 +25,7 @@ from app.modules.students.schemas import (
 from app.modules.students.service import StudentService
 
 router = APIRouter()
+DateQuery = Annotated[date | None, Query()]
 
 
 @router.get("", response_model=Page[StudentRead])
@@ -87,4 +97,47 @@ async def list_student_batch_memberships(
     return await BatchGroupService(session).list_student_batch_memberships(
         student_id,
         pagination,
+    )
+
+
+@router.get(
+    "/{student_id}/batch-schedule-days",
+    response_model=Page[StudentBatchScheduleDayRead],
+)
+async def list_student_batch_schedule_days(
+    student_id: UUID,
+    session: DBSession,
+    pagination: Pagination,
+    starts_from: DateQuery = None,
+    starts_to: DateQuery = None,
+) -> Page[StudentBatchScheduleDayRead]:
+    return await BatchScheduleDayService(session).list_student_days(
+        student_id,
+        pagination,
+        starts_from=starts_from,
+        starts_to=starts_to,
+    )
+
+
+@router.put(
+    "/{student_id}/batch-schedule-days/{day_id}/selection",
+    response_model=BatchDayAllocationResult,
+)
+async def select_student_batch_day_option(
+    student_id: UUID,
+    day_id: UUID,
+    selection_in: BatchDayStudentSelection,
+    session: DBSession,
+) -> BatchDayAllocationResult:
+    booking, moved_from = await BookingService(session).select_batch_day_option(
+        student_id=student_id,
+        batch_schedule_day_id=day_id,
+        class_session_id=selection_in.class_session_id,
+        admin_override=False,
+        actor_user_id=None,
+        reason=selection_in.reason,
+    )
+    return BatchDayAllocationResult(
+        booking=booking,
+        moved_from_booking_id=moved_from,
     )

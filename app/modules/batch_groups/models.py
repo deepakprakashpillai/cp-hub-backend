@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from datetime import datetime
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import (
@@ -14,9 +17,12 @@ from sqlalchemy import (
     text,
     true,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+
+if TYPE_CHECKING:
+    from app.modules.packages.models import Package
 
 
 class BatchGroup(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -35,6 +41,13 @@ class BatchGroup(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     name: Mapped[str] = mapped_column(String(150), nullable=False)
+    package_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("packages.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+    package: Mapped[Package | None] = relationship(lazy="joined")
     default_capacity: Mapped[int] = mapped_column(Integer, nullable=False)
     is_active: Mapped[bool] = mapped_column(
         Boolean,

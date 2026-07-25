@@ -9,6 +9,7 @@ from app.modules.batch_groups.service import BatchGroupService
 from app.modules.bookings.service import BookingService
 from app.modules.students.models import Student, StudentProgramChange
 from app.modules.students.schemas import StudentCreate, StudentProgramSwitch, StudentUpdate
+from app.modules.teachers.models import Teacher
 from app.modules.users.models import User
 from app.shared.enums import StudentProgramType, StudentStatus, UserRole
 
@@ -90,6 +91,32 @@ class StudentService:
         await self.session.refresh(student)
         return student
 
+    async def set_assigned_teacher(
+        self,
+        student_id: UUID,
+        assigned_teacher_id: UUID | None,
+    ) -> Student:
+        student = await self.get_student(student_id)
+        if (
+            assigned_teacher_id is not None
+            and student.program_type != StudentProgramType.ONE_ON_ONE
+        ):
+            raise BadRequestError(
+                "Assigned teacher is only valid for one-on-one students"
+            )
+
+        if assigned_teacher_id is not None:
+            teacher = await self.session.get(Teacher, assigned_teacher_id)
+            if teacher is None:
+                raise NotFoundError("Teacher not found")
+            if not teacher.is_active:
+                raise BadRequestError("Assigned teacher must be active")
+
+        student.assigned_teacher_id = assigned_teacher_id
+        await self.session.commit()
+        await self.session.refresh(student)
+        return student
+
     async def switch_program(
         self,
         student_id: UUID,
@@ -112,6 +139,8 @@ class StudentService:
             reason=switch_in.reason,
         )
         student.program_type = switch_in.new_program_type
+        if switch_in.new_program_type == StudentProgramType.BATCH:
+            student.assigned_teacher_id = None
 
         self.session.add(change)
         await BookingService(self.session).cancel_future_bookings_for_student(

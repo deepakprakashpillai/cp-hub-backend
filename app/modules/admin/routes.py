@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -7,7 +7,16 @@ from fastapi import APIRouter, HTTPException, Query, Response, status
 from app.api.deps import DBSession, Pagination
 from app.core.pagination import Page
 from app.modules.admin.schemas import (
+    AdminBatchClassReschedule,
+    AdminBatchClassRescheduleResult,
+    AdminBatchGroupRead,
+    AdminBatchGroupSortBy,
+    AdminClassActivityRead,
+    AdminClassRead,
+    AdminClassRescheduleResult,
+    AdminClassRosterBookingRead,
     AdminDashboardSummaryRead,
+    AdminPackageSortBy,
     AdminStudentAccessGrantCreate,
     AdminStudentAccessGrantRead,
     AdminStudentAccessState,
@@ -17,18 +26,40 @@ from app.modules.admin.schemas import (
     AdminStudentPaymentRead,
     AdminStudentPaymentUpdate,
     AdminStudentRead,
+    AdminStudentSortBy,
+    AdminStudentUpdate,
     AdminTeacherAvailabilityGenerationResult,
     AdminTeacherCreate,
     AdminTeacherRead,
+    AdminTeacherSortBy,
+    SortOrder,
 )
 from app.modules.admin.service import AdminService
 from app.modules.batch_groups.schemas import (
+    BatchGroupCreate,
     BatchGroupRead,
     BatchGroupUpdate,
     BatchSessionBulkGenerate,
     BatchSessionBulkGenerateResult,
+    StudentBatchMembershipAssign,
     StudentBatchMembershipRead,
 )
+from app.modules.batch_schedule_days.schemas import (
+    BatchDayActionRequest,
+    BatchDayAllocationRequest,
+    BatchDayAllocationResult,
+    BatchDayBulkCancelRequest,
+    BatchDayBulkCancelResult,
+    BatchDayBulkCreate,
+    BatchDayBulkCreateResult,
+    BatchDayCreate,
+    BatchDayOptionCreate,
+    BatchDayOptionUpdate,
+    BatchScheduleDayRead,
+    BatchScheduleDefaultsRead,
+    BatchScheduleDefaultsUpdate,
+)
+from app.modules.booking_notes.schemas import BookingNoteRead
 from app.modules.bookings.schemas import (
     AdminAddStudentToClass,
     BatchBookingReschedule,
@@ -36,10 +67,11 @@ from app.modules.bookings.schemas import (
     BookingEventRead,
     BookingRead,
     ClassAttendanceMark,
+    OneOnOneBookingCreate,
     OneOnOneBookingReschedule,
 )
 from app.modules.classes.schemas import BatchClassSessionCreate, ClassSessionRead
-from app.modules.packages.schemas import PackageRead, PackageUpdate
+from app.modules.packages.schemas import PackageCreate, PackageRead, PackageUpdate
 from app.modules.schedules.schemas import (
     TeacherAvailabilityBlockCreate,
     TeacherAvailabilityRuleCreate,
@@ -50,26 +82,38 @@ from app.modules.schedules.schemas import (
     TeacherAvailabilitySlotRead,
     TeacherAvailabilitySlotUpdate,
 )
-from app.modules.students.schemas import (
-    StudentProgramChangeRead,
-    StudentProgramSwitch,
-    StudentUpdate,
-)
+from app.modules.students.schemas import StudentProgramChangeRead, StudentProgramSwitch
 from app.modules.teachers.schemas import TeacherUpdate
 from app.modules.users.schemas import UserRead, UserUpdate
-from app.shared.enums import BookingStatus, ClassSessionStatus, StudentProgramType, StudentStatus
+from app.shared.enums import (
+    AvailabilitySlotSource,
+    AvailabilitySlotStatus,
+    BookingStatus,
+    ClassSessionStatus,
+    StudentProgramType,
+    StudentStatus,
+)
 
 router = APIRouter()
 DatetimeQuery = Annotated[datetime | None, Query()]
+DateQuery = Annotated[date | None, Query()]
 ProgramTypeQuery = Annotated[StudentProgramType | None, Query()]
 IsActiveQuery = Annotated[bool | None, Query()]
 SearchQuery = Annotated[str | None, Query(max_length=150)]
 StudentStatusQuery = Annotated[StudentStatus | None, Query()]
 StudentAccessStateQuery = Annotated[AdminStudentAccessState | None, Query()]
+StudentSortByQuery = Annotated[AdminStudentSortBy, Query()]
+TeacherSortByQuery = Annotated[AdminTeacherSortBy, Query()]
+BatchGroupSortByQuery = Annotated[AdminBatchGroupSortBy, Query()]
+PackageSortByQuery = Annotated[AdminPackageSortBy, Query()]
+SortOrderQuery = Annotated[SortOrder, Query()]
+AvailabilitySlotStatusQuery = Annotated[AvailabilitySlotStatus | None, Query()]
+AvailabilitySlotSourceQuery = Annotated[AvailabilitySlotSource | None, Query()]
 ClassSessionStatusQuery = Annotated[ClassSessionStatus | None, Query()]
 BookingStatusQuery = Annotated[BookingStatus | None, Query()]
 TeacherIdQuery = Annotated[UUID | None, Query()]
 DaysAheadQuery = Annotated[int, Query(ge=1, le=90)]
+ReasonQuery = Annotated[str | None, Query(max_length=1000)]
 
 
 def normalize_query_datetime(value: datetime | None) -> datetime | None:
@@ -104,6 +148,9 @@ async def list_students(
     program_type: ProgramTypeQuery = None,
     access_state: StudentAccessStateQuery = None,
     batch_group_id: UUID | None = None,
+    assigned_teacher_id: TeacherIdQuery = None,
+    sort_by: StudentSortByQuery = AdminStudentSortBy.CREATED_AT,
+    sort_order: SortOrderQuery = SortOrder.DESC,
 ) -> Page[AdminStudentRead]:
     return await AdminService(session).list_students(
         pagination,
@@ -112,6 +159,9 @@ async def list_students(
         program_type=program_type,
         access_state=access_state,
         batch_group_id=batch_group_id,
+        assigned_teacher_id=assigned_teacher_id,
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
 
 
@@ -139,11 +189,17 @@ async def list_teachers(
     pagination: Pagination,
     q: SearchQuery = None,
     is_active: IsActiveQuery = None,
+    account_is_active: IsActiveQuery = None,
+    sort_by: TeacherSortByQuery = AdminTeacherSortBy.CREATED_AT,
+    sort_order: SortOrderQuery = SortOrder.DESC,
 ) -> Page[AdminTeacherRead]:
     return await AdminService(session).list_teachers(
         pagination,
         q=q,
         is_active=is_active,
+        account_is_active=account_is_active,
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
 
 
@@ -257,12 +313,18 @@ async def list_teacher_availability_slots(
     teacher_id: TeacherIdQuery = None,
     starts_from: DatetimeQuery = None,
     starts_to: DatetimeQuery = None,
+    status: AvailabilitySlotStatusQuery = None,
+    source: AvailabilitySlotSourceQuery = None,
+    sort_order: SortOrderQuery = SortOrder.ASC,
 ) -> Page[TeacherAvailabilitySlotRead]:
     return await AdminService(session).list_teacher_availability_slots(
         pagination,
         teacher_id=teacher_id,
         starts_from=normalize_query_datetime(starts_from),
         starts_to=normalize_query_datetime(starts_to),
+        status=status,
+        source=source,
+        sort_order=sort_order,
     )
 
 
@@ -357,7 +419,7 @@ async def get_student(
 @router.patch("/students/{student_id}", response_model=AdminStudentRead)
 async def update_student(
     student_id: UUID,
-    student_in: StudentUpdate,
+    student_in: AdminStudentUpdate,
     session: DBSession,
 ) -> AdminStudentRead:
     return await AdminService(session).update_student(student_id, student_in)
@@ -476,20 +538,213 @@ async def list_student_batch_memberships(
     return await AdminService(session).list_student_batch_memberships(student_id, pagination)
 
 
-@router.get("/batch-groups", response_model=Page[BatchGroupRead])
+@router.get(
+    "/batch-schedule-defaults",
+    response_model=BatchScheduleDefaultsRead,
+)
+async def get_batch_schedule_defaults(session: DBSession) -> BatchScheduleDefaultsRead:
+    return await AdminService(session).get_batch_schedule_defaults()
+
+
+@router.patch(
+    "/batch-schedule-defaults",
+    response_model=BatchScheduleDefaultsRead,
+)
+async def update_batch_schedule_defaults(
+    defaults_in: BatchScheduleDefaultsUpdate,
+    session: DBSession,
+) -> BatchScheduleDefaultsRead:
+    return await AdminService(session).update_batch_schedule_defaults(defaults_in)
+
+
+@router.get("/batch-schedule-days", response_model=Page[BatchScheduleDayRead])
+async def list_batch_schedule_days(
+    session: DBSession,
+    pagination: Pagination,
+    batch_group_id: UUID | None = None,
+    starts_from: DateQuery = None,
+    starts_to: DateQuery = None,
+) -> Page[BatchScheduleDayRead]:
+    return await AdminService(session).list_batch_schedule_days(
+        pagination,
+        batch_group_id=batch_group_id,
+        starts_from=starts_from,
+        starts_to=starts_to,
+    )
+
+
+@router.post(
+    "/batch-schedule-days",
+    response_model=BatchScheduleDayRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_batch_schedule_day(
+    day_in: BatchDayCreate,
+    session: DBSession,
+) -> BatchScheduleDayRead:
+    return await AdminService(session).create_batch_schedule_day(day_in)
+
+
+@router.post(
+    "/batch-schedule-days/bulk",
+    response_model=BatchDayBulkCreateResult,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_batch_schedule_days_bulk(
+    bulk_in: BatchDayBulkCreate,
+    session: DBSession,
+) -> BatchDayBulkCreateResult:
+    return await AdminService(session).create_batch_schedule_days_bulk(bulk_in)
+
+
+@router.post(
+    "/batch-schedule-days/cancel-bulk",
+    response_model=BatchDayBulkCancelResult,
+)
+async def cancel_batch_schedule_days_bulk(
+    cancel_in: BatchDayBulkCancelRequest,
+    session: DBSession,
+) -> BatchDayBulkCancelResult:
+    return await AdminService(session).cancel_batch_schedule_days_bulk(cancel_in)
+
+
+@router.get(
+    "/batch-schedule-days/{day_id}",
+    response_model=BatchScheduleDayRead,
+)
+async def get_batch_schedule_day(
+    day_id: UUID,
+    session: DBSession,
+) -> BatchScheduleDayRead:
+    return await AdminService(session).get_batch_schedule_day(day_id)
+
+
+@router.post(
+    "/batch-schedule-days/{day_id}/cancel",
+    response_model=BatchScheduleDayRead,
+)
+async def cancel_batch_schedule_day(
+    day_id: UUID,
+    action_in: BatchDayActionRequest,
+    session: DBSession,
+) -> BatchScheduleDayRead:
+    return await AdminService(session).cancel_batch_schedule_day(day_id, action_in)
+
+
+@router.post(
+    "/batch-schedule-days/{day_id}/options",
+    response_model=BatchScheduleDayRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_batch_schedule_day_option(
+    day_id: UUID,
+    option_in: BatchDayOptionCreate,
+    session: DBSession,
+) -> BatchScheduleDayRead:
+    return await AdminService(session).add_batch_schedule_day_option(day_id, option_in)
+
+
+@router.patch(
+    "/batch-schedule-days/{day_id}/options/{class_session_id}",
+    response_model=BatchScheduleDayRead,
+)
+async def update_batch_schedule_day_option(
+    day_id: UUID,
+    class_session_id: UUID,
+    option_in: BatchDayOptionUpdate,
+    session: DBSession,
+) -> BatchScheduleDayRead:
+    return await AdminService(session).update_batch_schedule_day_option(
+        day_id,
+        class_session_id,
+        option_in,
+    )
+
+
+@router.delete(
+    "/batch-schedule-days/{day_id}/options/{class_session_id}",
+    response_model=BatchScheduleDayRead,
+)
+async def remove_batch_schedule_day_option(
+    day_id: UUID,
+    class_session_id: UUID,
+    session: DBSession,
+) -> BatchScheduleDayRead:
+    return await AdminService(session).remove_batch_schedule_day_option(
+        day_id,
+        class_session_id,
+    )
+
+
+@router.put(
+    "/batch-schedule-days/{day_id}/students/{student_id}",
+    response_model=BatchDayAllocationResult,
+)
+async def assign_batch_day_student(
+    day_id: UUID,
+    student_id: UUID,
+    allocation_in: BatchDayAllocationRequest,
+    session: DBSession,
+) -> BatchDayAllocationResult:
+    return await AdminService(session).assign_batch_day_student(
+        day_id,
+        student_id,
+        allocation_in,
+    )
+
+
+@router.delete(
+    "/batch-schedule-days/{day_id}/students/{student_id}",
+    response_model=BookingRead,
+)
+async def remove_batch_day_student(
+    day_id: UUID,
+    student_id: UUID,
+    action_in: BatchDayActionRequest,
+    session: DBSession,
+) -> BookingRead:
+    return await AdminService(session).remove_batch_day_student(
+        day_id,
+        student_id,
+        action_in,
+    )
+
+
+@router.get("/batch-groups", response_model=Page[AdminBatchGroupRead])
 async def list_batch_groups(
     session: DBSession,
     pagination: Pagination,
+    q: SearchQuery = None,
     is_active: IsActiveQuery = None,
-) -> Page[BatchGroupRead]:
-    return await AdminService(session).list_batch_groups(pagination, is_active=is_active)
+    sort_by: BatchGroupSortByQuery = AdminBatchGroupSortBy.CREATED_AT,
+    sort_order: SortOrderQuery = SortOrder.DESC,
+) -> Page[AdminBatchGroupRead]:
+    return await AdminService(session).list_batch_groups(
+        pagination,
+        is_active=is_active,
+        q=q,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
 
 
-@router.get("/batch-groups/{batch_group_id}", response_model=BatchGroupRead)
+@router.post(
+    "/batch-groups",
+    response_model=BatchGroupRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_batch_group(
+    batch_group_in: BatchGroupCreate,
+    session: DBSession,
+) -> BatchGroupRead:
+    return await AdminService(session).create_batch_group(batch_group_in)
+
+
+@router.get("/batch-groups/{batch_group_id}", response_model=AdminBatchGroupRead)
 async def get_batch_group(
     batch_group_id: UUID,
     session: DBSession,
-) -> BatchGroupRead:
+) -> AdminBatchGroupRead:
     return await AdminService(session).get_batch_group(batch_group_id)
 
 
@@ -527,12 +782,63 @@ async def list_batch_group_students(
     )
 
 
+@router.post(
+    "/batch-groups/{batch_group_id}/students",
+    response_model=StudentBatchMembershipRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_student_to_batch_group(
+    batch_group_id: UUID,
+    membership_in: StudentBatchMembershipAssign,
+    session: DBSession,
+) -> StudentBatchMembershipRead:
+    return await AdminService(session).add_student_to_batch_group(
+        batch_group_id,
+        membership_in,
+    )
+
+
+@router.delete(
+    "/batch-groups/{batch_group_id}/students/{student_id}",
+    response_model=StudentBatchMembershipRead,
+)
+async def remove_student_from_batch_group(
+    batch_group_id: UUID,
+    student_id: UUID,
+    session: DBSession,
+    reason: ReasonQuery = None,
+) -> StudentBatchMembershipRead:
+    return await AdminService(session).remove_student_from_batch_group(
+        batch_group_id,
+        student_id,
+        reason=reason,
+    )
+
+
 @router.get("/packages", response_model=Page[PackageRead])
 async def list_packages(
     session: DBSession,
     pagination: Pagination,
+    q: SearchQuery = None,
+    is_active: IsActiveQuery = None,
+    sort_by: PackageSortByQuery = AdminPackageSortBy.CREATED_AT,
+    sort_order: SortOrderQuery = SortOrder.DESC,
 ) -> Page[PackageRead]:
-    return await AdminService(session).list_packages(pagination)
+    return await AdminService(session).list_packages(
+        pagination,
+        q=q,
+        is_active=is_active,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+
+
+@router.post("/packages", response_model=PackageRead, status_code=status.HTTP_201_CREATED)
+async def create_package(
+    package_in: PackageCreate,
+    session: DBSession,
+) -> PackageRead:
+    return await AdminService(session).create_package(package_in)
 
 
 @router.get("/packages/{package_id}", response_model=PackageRead)
@@ -560,7 +866,7 @@ async def void_package(
     return await AdminService(session).void_package(package_id)
 
 
-@router.get("/classes", response_model=Page[ClassSessionRead])
+@router.get("/classes", response_model=Page[AdminClassRead])
 async def list_classes(
     session: DBSession,
     pagination: Pagination,
@@ -570,7 +876,9 @@ async def list_classes(
     status: ClassSessionStatusQuery = None,
     teacher_id: UUID | None = None,
     batch_group_id: UUID | None = None,
-) -> Page[ClassSessionRead]:
+    sort_order: SortOrderQuery = SortOrder.ASC,
+    q: SearchQuery = None,
+) -> Page[AdminClassRead]:
     return await AdminService(session).list_class_sessions(
         pagination,
         program_type=program_type,
@@ -579,24 +887,50 @@ async def list_classes(
         status=status,
         teacher_id=teacher_id,
         batch_group_id=batch_group_id,
+        sort_order=sort_order,
+        q=q,
     )
 
 
-@router.get("/classes/{class_session_id}", response_model=ClassSessionRead)
+@router.get("/classes/{class_session_id}", response_model=AdminClassRead)
 async def get_class_session(
     class_session_id: UUID,
     session: DBSession,
-) -> ClassSessionRead:
+) -> AdminClassRead:
     return await AdminService(session).get_class_session(class_session_id)
 
 
-@router.post("/classes/{class_session_id}/cancel", response_model=ClassSessionRead)
+@router.post("/classes/{class_session_id}/cancel", response_model=AdminClassRead)
 async def cancel_class_session(
     class_session_id: UUID,
     cancel_in: BookingActionRequest,
     session: DBSession,
-) -> ClassSessionRead:
+) -> AdminClassRead:
     return await AdminService(session).cancel_class_session(class_session_id, cancel_in)
+
+
+@router.get(
+    "/classes/{class_session_id}/roster",
+    response_model=Page[AdminClassRosterBookingRead],
+)
+async def list_class_roster(
+    class_session_id: UUID,
+    session: DBSession,
+    pagination: Pagination,
+) -> Page[AdminClassRosterBookingRead]:
+    return await AdminService(session).list_class_roster(class_session_id, pagination)
+
+
+@router.get(
+    "/classes/{class_session_id}/activity",
+    response_model=Page[AdminClassActivityRead],
+)
+async def list_class_activity(
+    class_session_id: UUID,
+    session: DBSession,
+    pagination: Pagination,
+) -> Page[AdminClassActivityRead]:
+    return await AdminService(session).list_class_activity(class_session_id, pagination)
 
 
 @router.get("/bookings", response_model=Page[BookingRead])
@@ -638,6 +972,15 @@ async def list_booking_events(
     return await AdminService(session).list_booking_events(booking_id, pagination)
 
 
+@router.get("/bookings/{booking_id}/notes", response_model=Page[BookingNoteRead])
+async def list_booking_notes(
+    booking_id: UUID,
+    session: DBSession,
+    pagination: Pagination,
+) -> Page[BookingNoteRead]:
+    return await AdminService(session).list_booking_notes(booking_id, pagination)
+
+
 @router.post(
     "/batch-groups/{batch_group_id}/sessions/generate",
     response_model=BatchSessionBulkGenerateResult,
@@ -667,6 +1010,18 @@ async def create_batch_class_session(
     session: DBSession,
 ) -> ClassSessionRead:
     return await AdminService(session).create_batch_class_session(class_session_in)
+
+
+@router.post(
+    "/bookings/one-on-one",
+    response_model=BookingRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_one_on_one_booking(
+    booking_in: OneOnOneBookingCreate,
+    session: DBSession,
+) -> BookingRead:
+    return await AdminService(session).create_one_on_one_booking(booking_in)
 
 
 @router.post("/classes/{class_session_id}/students", response_model=BookingRead)
@@ -715,3 +1070,33 @@ async def reschedule_batch_booking(
     session: DBSession,
 ) -> BookingRead:
     return await AdminService(session).reschedule_batch_booking(booking_id, reschedule_in)
+
+
+@router.post(
+    "/classes/{class_session_id}/reschedule/one-on-one",
+    response_model=AdminClassRescheduleResult,
+)
+async def reschedule_one_on_one_class(
+    class_session_id: UUID,
+    reschedule_in: OneOnOneBookingReschedule,
+    session: DBSession,
+) -> AdminClassRescheduleResult:
+    return await AdminService(session).reschedule_one_on_one_class(
+        class_session_id,
+        reschedule_in,
+    )
+
+
+@router.post(
+    "/classes/{class_session_id}/reschedule/batch",
+    response_model=AdminBatchClassRescheduleResult,
+)
+async def reschedule_batch_class(
+    class_session_id: UUID,
+    reschedule_in: AdminBatchClassReschedule,
+    session: DBSession,
+) -> AdminBatchClassRescheduleResult:
+    return await AdminService(session).reschedule_batch_class(
+        class_session_id,
+        reschedule_in,
+    )

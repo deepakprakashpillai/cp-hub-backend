@@ -4,6 +4,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.modules.classes.schemas import ClassSessionRead
+from app.modules.packages.schemas import PackageSummary
 from app.shared.enums import BatchSlot, DayOfWeek
 
 MAX_BATCH_GENERATION_DAYS = 90
@@ -12,6 +13,7 @@ MAX_BATCH_SESSIONS_PER_DAY = 3
 
 class BatchGroupCreate(BaseModel):
     name: str = Field(min_length=1, max_length=150)
+    package_id: UUID | None = None
     default_capacity: int = Field(gt=0)
     is_active: bool = True
     notes: str | None = Field(default=None, max_length=1000)
@@ -22,11 +24,14 @@ class BatchGroupUpdate(BaseModel):
     default_capacity: int | None = Field(default=None, gt=0)
     is_active: bool | None = None
     notes: str | None = Field(default=None, max_length=1000)
+    package_id: UUID | None = None
 
 
 class BatchGroupRead(BaseModel):
     id: UUID
     name: str
+    package_id: UUID | None
+    package: PackageSummary | None
     default_capacity: int
     is_active: bool
     notes: str | None
@@ -40,12 +45,26 @@ class StudentBatchMembershipAssign(BaseModel):
     student_id: UUID
     assigned_by_user_id: UUID | None = None
     reason: str | None = Field(default=None, max_length=1000)
+    allow_package_access_override: bool = False
+
+    @model_validator(mode="after")
+    def validate_override_reason(self) -> "StudentBatchMembershipAssign":
+        if self.allow_package_access_override and not (self.reason or "").strip():
+            raise ValueError("reason is required for package access override")
+        return self
 
 
 class StudentBatchTransfer(BaseModel):
     batch_group_id: UUID
     assigned_by_user_id: UUID | None = None
     reason: str | None = Field(default=None, max_length=1000)
+    allow_package_access_override: bool = False
+
+    @model_validator(mode="after")
+    def validate_override_reason(self) -> "StudentBatchTransfer":
+        if self.allow_package_access_override and not (self.reason or "").strip():
+            raise ValueError("reason is required for package access override")
+        return self
 
 
 class StudentBatchMembershipRead(BaseModel):

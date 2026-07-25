@@ -4,6 +4,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field, model_validator
 
+from app.modules.batch_groups.schemas import BatchGroupRead
+from app.modules.bookings.schemas import BookingRead
+from app.modules.classes.schemas import ClassSessionRead
+from app.modules.classes.schemas import normalize_utc_datetime as normalize_class_datetime
 from app.modules.student_access_grants.schemas import StudentAccessGrantRead
 from app.modules.student_payments.schemas import (
     StudentPaymentRead,
@@ -11,14 +15,17 @@ from app.modules.student_payments.schemas import (
 from app.modules.student_payments.schemas import (
     normalize_utc_datetime as normalize_paid_at,
 )
-from app.modules.students.schemas import StudentRead, normalize_utc_datetime
+from app.modules.students.schemas import StudentRead, StudentUpdate, normalize_utc_datetime
 from app.modules.teachers.schemas import TeacherRead
 from app.modules.users.schemas import UserRead
 from app.shared.enums import (
+    BatchSlot,
+    BookingEventType,
     PaymentMethod,
     StudentAccessGrantType,
     StudentProgramType,
     StudentStatus,
+    UserRole,
 )
 from app.shared.utils import utc_now
 
@@ -28,6 +35,43 @@ class AdminStudentAccessState(StrEnum):
     EXPIRED = "expired"
     NOT_STARTED = "not_started"
     NONE = "none"
+
+
+class AdminStudentSortBy(StrEnum):
+    CREATED_AT = "created_at"
+    JOINED_AT = "joined_at"
+    NAME = "name"
+    STATUS = "status"
+    PROGRAM_TYPE = "program_type"
+    ACCESS_ENDS_AT = "access_ends_at"
+
+
+class AdminTeacherSortBy(StrEnum):
+    CREATED_AT = "created_at"
+    NAME = "name"
+    DISPLAY_NAME = "display_name"
+    IS_ACTIVE = "is_active"
+
+
+class AdminBatchGroupSortBy(StrEnum):
+    CREATED_AT = "created_at"
+    NAME = "name"
+    ACTIVE_MEMBER_COUNT = "active_member_count"
+    UPCOMING_SCHEDULED_COUNT = "upcoming_scheduled_count"
+    IS_ACTIVE = "is_active"
+
+
+class AdminPackageSortBy(StrEnum):
+    CREATED_AT = "created_at"
+    NAME = "name"
+    DURATION_DAYS = "duration_days"
+    PRICE_AMOUNT = "price_amount"
+    IS_ACTIVE = "is_active"
+
+
+class SortOrder(StrEnum):
+    ASC = "asc"
+    DESC = "desc"
 
 
 class AdminUserCreateFields(BaseModel):
@@ -116,6 +160,17 @@ class AdminStudentBatchGroupSet(BaseModel):
     batch_group_id: UUID
     assigned_by_user_id: UUID | None = None
     reason: str | None = Field(default=None, max_length=1000)
+    allow_package_access_override: bool = False
+
+    @model_validator(mode="after")
+    def validate_override_reason(self) -> "AdminStudentBatchGroupSet":
+        if self.allow_package_access_override and not (self.reason or "").strip():
+            raise ValueError("reason is required for package access override")
+        return self
+
+
+class AdminStudentUpdate(StudentUpdate):
+    assigned_teacher_id: UUID | None = None
 
 
 class AdminTeacherRead(BaseModel):
@@ -126,6 +181,105 @@ class AdminTeacherRead(BaseModel):
 class AdminStudentRead(BaseModel):
     user: UserRead
     student: StudentRead
+    assigned_teacher: AdminTeacherRead | None = None
+
+
+class AdminClassTeacherSummary(BaseModel):
+    id: UUID
+    display_name: str
+    full_name: str
+    profile_photo_url: str | None
+
+
+class AdminClassBatchGroupSummary(BaseModel):
+    id: UUID
+    name: str
+    is_active: bool
+
+
+class AdminClassStudentSummary(BaseModel):
+    id: UUID
+    user_id: UUID
+    full_name: str
+    email: EmailStr
+    phone: str | None
+    status: StudentStatus
+
+
+class AdminClassBookingCounts(BaseModel):
+    booked: int = 0
+    cancelled: int = 0
+    attended: int = 0
+    missed: int = 0
+
+
+class AdminClassRead(ClassSessionRead):
+    teacher: AdminClassTeacherSummary | None = None
+    batch_group: AdminClassBatchGroupSummary | None = None
+    primary_student: AdminClassStudentSummary | None = None
+    booking_counts: AdminClassBookingCounts
+
+
+class AdminClassRosterBookingRead(BookingRead):
+    student: AdminClassStudentSummary
+
+
+class AdminActivityStudentSummary(BaseModel):
+    id: UUID
+    full_name: str
+    email: EmailStr
+
+
+class AdminActivityActorSummary(BaseModel):
+    id: UUID
+    full_name: str
+    role: UserRole
+
+
+class AdminClassActivityRead(BaseModel):
+    id: UUID
+    class_session_id: UUID
+    booking_id: UUID | None
+    student: AdminActivityStudentSummary | None
+    event_type: BookingEventType
+    reason: str
+    metadata: dict
+    actor: AdminActivityActorSummary | None
+    actor_label: str
+    created_at: datetime
+
+
+class AdminBatchGroupRead(BatchGroupRead):
+    active_member_count: int
+    upcoming_scheduled_count: int
+
+
+class AdminBatchClassReschedule(BaseModel):
+    starts_at: datetime
+    ends_at: datetime
+    teacher_id: UUID | None = None
+    batch_slot: BatchSlot | None = None
+    capacity: int | None = Field(default=None, gt=0)
+    actor_user_id: UUID | None = None
+    reason: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_datetime_range(self) -> "AdminBatchClassReschedule":
+        self.starts_at = normalize_class_datetime(self.starts_at)
+        self.ends_at = normalize_class_datetime(self.ends_at)
+        if self.starts_at >= self.ends_at:
+            raise ValueError("starts_at must be before ends_at")
+        return self
+
+
+class AdminClassRescheduleResult(BaseModel):
+    class_session: AdminClassRead
+    booking: BookingRead
+
+
+class AdminBatchClassRescheduleResult(BaseModel):
+    class_session: AdminClassRead
+    bookings: list[BookingRead]
 
 
 class AdminDashboardWindowRead(BaseModel):

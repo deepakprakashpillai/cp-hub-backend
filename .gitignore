@@ -19,3 +19,4 @@ build/
 alembic/versions/*.pyc
 postgres_data/
 docs/
+graphify-out/

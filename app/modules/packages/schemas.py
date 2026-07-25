@@ -30,3 +30,14 @@ class PackageRead(PackageBase):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class PackageSummary(BaseModel):
+    id: UUID
+    name: str
+    duration_days: int
+    price_amount: int
+    currency: str
+    is_active: bool
+
+    model_config = ConfigDict(from_attributes=True)

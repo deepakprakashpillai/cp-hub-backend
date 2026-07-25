@@ -44,6 +44,16 @@ class BatchSlot(StrEnum):
     AFTERNOON = "afternoon"
 
 
+class BatchCapacityStrategy(StrEnum):
+    BATCH_GROUP_DEFAULT = "batch_group_default"
+    FIXED = "fixed"
+
+
+class BatchScheduleDayStatus(StrEnum):
+    SCHEDULED = "scheduled"
+    CANCELLED = "cancelled"
+
+
 class DayOfWeek(StrEnum):
     MONDAY = "monday"
     TUESDAY = "tuesday"
@@ -88,6 +98,16 @@ class BookingEventType(StrEnum):
     CLASS_CANCELLED_EMPTY = "class_cancelled_empty"
     ATTENDANCE_MARKED = "attendance_marked"
     MANUALLY_ADDED_BY_ADMIN = "manually_added_by_admin"
+    SELECTED_BY_STUDENT = "selected_by_student"
+    ASSIGNED_BY_ADMIN = "assigned_by_admin"
+    MOVED_BY_ADMIN = "moved_by_admin"
+    REMOVED_BY_ADMIN = "removed_by_admin"
+    BATCH_DAY_CANCELLED = "batch_day_cancelled"
+
+
+class BookingNoteVisibility(StrEnum):
+    ADMIN_ONLY = "admin_only"
+    STUDENT_VISIBLE = "student_visible"
 
 
 class LeadStatus(StrEnum):

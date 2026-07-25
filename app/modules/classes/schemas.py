@@ -35,8 +35,11 @@ class ClassSessionRead(BaseModel):
     teacher_id: UUID | None
     teacher_availability_slot_id: UUID | None
     batch_group_id: UUID | None
+    batch_schedule_day_id: UUID | None
     program_type: StudentProgramType
     batch_slot: BatchSlot | None
+    display_label: str | None
+    option_order: int | None
     starts_at: datetime
     ends_at: datetime
     status: ClassSessionStatus

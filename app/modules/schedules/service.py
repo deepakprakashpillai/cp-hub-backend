@@ -92,9 +92,18 @@ class ScheduleService:
         teacher_id: UUID | None = None,
         starts_from=None,
         starts_to=None,
+        status: AvailabilitySlotStatus | None = None,
+        source: AvailabilitySlotSource | None = None,
+        descending: bool = False,
     ) -> Page:
+        starts_at_order = (
+            TeacherAvailabilitySlot.starts_at.desc()
+            if descending
+            else TeacherAvailabilitySlot.starts_at.asc()
+        )
         statement = select(TeacherAvailabilitySlot).order_by(
-            TeacherAvailabilitySlot.starts_at.asc()
+            starts_at_order,
+            TeacherAvailabilitySlot.id.asc(),
         )
         if teacher_id is not None:
             statement = statement.where(TeacherAvailabilitySlot.teacher_id == teacher_id)
@@ -102,6 +111,10 @@ class ScheduleService:
             statement = statement.where(TeacherAvailabilitySlot.starts_at >= starts_from)
         if starts_to is not None:
             statement = statement.where(TeacherAvailabilitySlot.starts_at <= starts_to)
+        if status is not None:
+            statement = statement.where(TeacherAvailabilitySlot.status == status)
+        if source is not None:
+            statement = statement.where(TeacherAvailabilitySlot.source == source)
 
         return await paginate_scalars(self.session, statement, pagination)
 

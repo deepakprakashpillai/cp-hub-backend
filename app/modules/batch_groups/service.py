@@ -15,8 +15,11 @@ from app.modules.batch_groups.schemas import (
     StudentBatchMembershipAssign,
     StudentBatchTransfer,
 )
+from app.modules.batch_schedule_days.models import BatchScheduleDay
 from app.modules.bookings.models import Booking, BookingEvent
 from app.modules.classes.models import ClassSession
+from app.modules.packages.models import Package
+from app.modules.student_access_grants.models import StudentAccessGrant
 from app.modules.students.models import Student
 from app.modules.teachers.models import Teacher
 from app.modules.users.models import User
@@ -64,6 +67,13 @@ class BatchGroupService:
     async def create_batch_group(self, batch_group_in: BatchGroupCreate) -> BatchGroup:
         if batch_group_in.is_active:
             await self._ensure_active_name_available(batch_group_in.name)
+            if batch_group_in.package_id is None:
+                raise ConflictError("An active batch group requires a package")
+        if batch_group_in.package_id is not None:
+            await self._get_package(
+                batch_group_in.package_id,
+                require_active=batch_group_in.is_active,
+            )
 
         batch_group = BatchGroup(**batch_group_in.model_dump())
         self.session.add(batch_group)
@@ -90,6 +100,13 @@ class BatchGroupService:
                 final_name,
                 exclude_batch_group_id=batch_group.id,
             )
+        package_changed = "package_id" in update_data
+        final_package_id = update_data.get("package_id", batch_group.package_id)
+        activating = final_is_active and not batch_group.is_active
+        if final_is_active and final_package_id is None and (package_changed or activating):
+            raise ConflictError("An active batch group requires a package")
+        if final_package_id is not None and (package_changed or activating):
+            await self._get_package(final_package_id, require_active=final_is_active)
 
         for field, value in update_data.items():
             setattr(batch_group, field, value)
@@ -137,6 +154,11 @@ class BatchGroupService:
 
         student = await self._get_batch_student(membership_in.student_id)
         await self._get_optional_user(membership_in.assigned_by_user_id)
+        await self._validate_student_package_access(
+            student.id,
+            batch_group,
+            allow_override=membership_in.allow_package_access_override,
+        )
 
         active_membership = await self.get_active_student_membership(student.id)
         if active_membership is not None:
@@ -167,6 +189,11 @@ class BatchGroupService:
         if not batch_group.is_active:
             raise ConflictError("Cannot transfer student to an inactive batch group")
         await self._get_optional_user(transfer_in.assigned_by_user_id)
+        await self._validate_student_package_access(
+            student.id,
+            batch_group,
+            allow_override=transfer_in.allow_package_access_override,
+        )
 
         active_membership = await self.get_active_student_membership(student.id)
         if active_membership is not None and active_membership.batch_group_id == batch_group.id:
@@ -245,6 +272,66 @@ class BatchGroupService:
 
         return True
 
+    async def remove_student_from_batch_group(
+        self,
+        batch_group_id: UUID,
+        student_id: UUID,
+        *,
+        reason: str | None,
+    ) -> StudentBatchMembership:
+        await self.get_batch_group(batch_group_id)
+        student = await self.session.get(Student, student_id)
+        if student is None:
+            raise NotFoundError("Student not found")
+
+        membership = await self.session.scalar(
+            select(StudentBatchMembership)
+            .where(
+                StudentBatchMembership.batch_group_id == batch_group_id,
+                StudentBatchMembership.student_id == student_id,
+                StudentBatchMembership.is_active.is_(True),
+            )
+            .with_for_update()
+        )
+        if membership is None:
+            raise NotFoundError("Active batch membership not found")
+
+        now = utc_now()
+        cancellation_reason = reason or "removed from batch group"
+        membership.is_active = False
+        membership.ended_at = now
+        membership.end_reason = reason
+
+        bookings = await self.session.scalars(
+            select(Booking)
+            .join(ClassSession, Booking.class_session_id == ClassSession.id)
+            .where(
+                Booking.student_id == student_id,
+                Booking.status == BookingStatus.BOOKED,
+                ClassSession.batch_group_id == batch_group_id,
+                ClassSession.starts_at > now,
+            )
+            .with_for_update()
+        )
+        for booking in bookings:
+            booking.status = BookingStatus.CANCELLED
+            self.session.add(
+                BookingEvent(
+                    booking_id=booking.id,
+                    event_type=BookingEventType.CANCELLED_BY_ADMIN,
+                    actor_user_id=None,
+                    reason=cancellation_reason,
+                    event_metadata={
+                        "batch_group_id": str(batch_group_id),
+                        "membership_id": str(membership.id),
+                    },
+                )
+            )
+
+        await self.session.commit()
+        await self.session.refresh(membership)
+        return membership
+
     async def generate_batch_sessions(
         self,
         batch_group_id: UUID,
@@ -262,8 +349,40 @@ class BatchGroupService:
             expected_sessions=expected_sessions,
         )
 
-        class_sessions: list[ClassSession] = []
+        day_by_date: dict[date, BatchScheduleDay] = {}
         for session_data in expected_sessions:
+            schedule_date = session_data["starts_at"].date()
+            if schedule_date in day_by_date:
+                continue
+            existing_day = await self.session.scalar(
+                select(BatchScheduleDay.id).where(
+                    BatchScheduleDay.batch_group_id == batch_group.id,
+                    BatchScheduleDay.schedule_date == schedule_date,
+                )
+            )
+            if existing_day is not None:
+                raise ConflictError(
+                    f"Batch schedule day already exists for {schedule_date.isoformat()}"
+                )
+            day = BatchScheduleDay(
+                batch_group_id=batch_group.id,
+                schedule_date=schedule_date,
+                created_by_user_id=None,
+            )
+            self.session.add(day)
+            day_by_date[schedule_date] = day
+        await self.session.flush()
+
+        class_sessions: list[ClassSession] = []
+        option_order_by_date: dict[date, int] = {}
+        for session_data in expected_sessions:
+            schedule_date = session_data["starts_at"].date()
+            option_order_by_date[schedule_date] = option_order_by_date.get(schedule_date, 0) + 1
+            session_data["batch_schedule_day_id"] = day_by_date[schedule_date].id
+            session_data["display_label"] = (
+                session_data["batch_slot"].value.replace("_", " ").title()
+            )
+            session_data["option_order"] = option_order_by_date[schedule_date]
             class_session = ClassSession(**session_data)
             self.session.add(class_session)
             class_sessions.append(class_session)
@@ -434,6 +553,46 @@ class BatchGroupService:
                     reason="batch transfer",
                     event_metadata={},
                 )
+            )
+
+    async def _get_package(
+        self,
+        package_id: UUID,
+        *,
+        require_active: bool,
+    ) -> Package:
+        package = await self.session.get(Package, package_id)
+        if package is None:
+            raise NotFoundError("Package not found")
+        if require_active and not package.is_active:
+            raise ConflictError("Active batch groups require an active package")
+        return package
+
+    async def _validate_student_package_access(
+        self,
+        student_id: UUID,
+        batch_group: BatchGroup,
+        *,
+        allow_override: bool,
+    ) -> None:
+        if allow_override:
+            return
+        if batch_group.package_id is None:
+            raise ConflictError(
+                "Batch group has no package; package access override is required"
+            )
+        now = utc_now()
+        matching_grant_id = await self.session.scalar(
+            select(StudentAccessGrant.id).where(
+                StudentAccessGrant.student_id == student_id,
+                StudentAccessGrant.package_id == batch_group.package_id,
+                StudentAccessGrant.access_starts_at <= now,
+                StudentAccessGrant.access_ends_at > now,
+            )
+        )
+        if matching_grant_id is None:
+            raise ConflictError(
+                "Student does not have current access for the batch group's package"
             )
 
 

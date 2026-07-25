@@ -3,8 +3,9 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import BadRequestError, NotFoundError
+from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.core.pagination import Page, PaginationParams, paginate_scalars
+from app.modules.batch_groups.models import BatchGroup
 from app.modules.packages.models import Package
 from app.modules.packages.schemas import PackageCreate, PackageUpdate
 
@@ -46,6 +47,8 @@ class PackageService:
         ):
             if non_nullable_field in update_data and update_data[non_nullable_field] is None:
                 raise BadRequestError(f"{non_nullable_field} cannot be null")
+        if update_data.get("is_active") is False:
+            await self._ensure_not_linked_to_active_batch_groups(package.id)
 
         for field, value in update_data.items():
             setattr(package, field, value)
@@ -56,7 +59,18 @@ class PackageService:
 
     async def void_package(self, package_id: UUID) -> Package:
         package = await self.get_package(package_id)
+        await self._ensure_not_linked_to_active_batch_groups(package.id)
         package.is_active = False
         await self.session.commit()
         await self.session.refresh(package)
         return package
+
+    async def _ensure_not_linked_to_active_batch_groups(self, package_id: UUID) -> None:
+        active_group_id = await self.session.scalar(
+            select(BatchGroup.id).where(
+                BatchGroup.package_id == package_id,
+                BatchGroup.is_active.is_(True),
+            )
+        )
+        if active_group_id is not None:
+            raise ConflictError("Package is linked to an active batch group")

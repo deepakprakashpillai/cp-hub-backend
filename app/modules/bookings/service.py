@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, time, timedelta
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -7,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.core.pagination import Page, PaginationParams, paginate_scalars
 from app.modules.batch_groups.models import StudentBatchMembership
+from app.modules.batch_schedule_days.models import BatchScheduleDay
 from app.modules.bookings.models import Booking, BookingEvent
 from app.modules.bookings.schemas import (
     AdminAddStudentToClass,
@@ -21,9 +23,11 @@ from app.modules.bookings.schemas import (
 from app.modules.classes.models import ClassSession
 from app.modules.schedules.models import TeacherAvailabilitySlot
 from app.modules.students.models import Student
+from app.modules.teachers.models import Teacher
 from app.modules.users.models import User
 from app.shared.enums import (
     AvailabilitySlotStatus,
+    BatchScheduleDayStatus,
     BookingEventType,
     BookingStatus,
     ClassSessionStatus,
@@ -31,6 +35,9 @@ from app.shared.enums import (
     StudentStatus,
 )
 from app.shared.utils import utc_now
+
+if TYPE_CHECKING:
+    from app.modules.admin.schemas import AdminBatchClassReschedule
 
 BATCH_BOOKING_CLOSES_BEFORE_START = timedelta(hours=3)
 STUDENT_BOOKING_CHANGE_CUTOFF = timedelta(hours=24)
@@ -120,6 +127,180 @@ class BookingService:
             commit=True,
         )
 
+    async def select_batch_day_option(
+        self,
+        *,
+        student_id: UUID,
+        batch_schedule_day_id: UUID,
+        class_session_id: UUID,
+        admin_override: bool,
+        actor_user_id: UUID | None,
+        reason: str | None,
+    ) -> tuple[Booking, UUID | None]:
+        if admin_override:
+            await self._get_optional_user(actor_user_id)
+        student = await self.session.scalar(
+            select(Student).where(Student.id == student_id).with_for_update()
+        )
+        if student is None:
+            raise NotFoundError("Student not found")
+        if student.program_type != StudentProgramType.BATCH:
+            raise ConflictError("Student is not a batch student")
+        if student.status != StudentStatus.ACTIVE:
+            raise ConflictError("Student is not active")
+
+        day = await self.session.get(BatchScheduleDay, batch_schedule_day_id)
+        if day is None:
+            raise NotFoundError("Batch schedule day not found")
+        if day.status == BatchScheduleDayStatus.CANCELLED:
+            raise ConflictError("Batch schedule day is not scheduled")
+        membership = await self._get_active_student_batch_membership(student.id)
+        if membership.batch_group_id != day.batch_group_id:
+            raise ConflictError("Student is not an active member of this batch")
+        class_session = await self._get_class_session_for_update(class_session_id)
+        if class_session.batch_schedule_day_id != day.id:
+            raise ConflictError("Class session is not an option for this batch day")
+        if class_session.status != ClassSessionStatus.SCHEDULED:
+            raise ConflictError("Batch-day option is not scheduled")
+        now = utc_now()
+        if class_session.starts_at <= now:
+            raise ConflictError("Batch-day option has already started")
+        self._ensure_student_access_covers_class(student, class_session.starts_at)
+
+        existing_booking = await self.session.scalar(
+            select(Booking)
+            .join(ClassSession, Booking.class_session_id == ClassSession.id)
+            .where(
+                Booking.student_id == student.id,
+                Booking.status != BookingStatus.CANCELLED,
+                ClassSession.batch_schedule_day_id == day.id,
+            )
+            .with_for_update()
+        )
+        if existing_booking is not None and existing_booking.class_session_id == class_session.id:
+            raise ConflictError("Student already selected this option")
+        if existing_booking is not None and not admin_override:
+            raise ConflictError("Student already selected an option for this batch day")
+
+        day_start = datetime.combine(day.schedule_date, time.min, tzinfo=UTC)
+        day_end = day_start + timedelta(days=1)
+        daily_conflict_statement = (
+            select(Booking.id)
+            .join(ClassSession, Booking.class_session_id == ClassSession.id)
+            .where(
+                Booking.student_id == student.id,
+                Booking.status != BookingStatus.CANCELLED,
+                ClassSession.status != ClassSessionStatus.CANCELLED,
+                ClassSession.starts_at >= day_start,
+                ClassSession.starts_at < day_end,
+            )
+        )
+        if existing_booking is not None:
+            daily_conflict_statement = daily_conflict_statement.where(
+                Booking.id != existing_booking.id
+            )
+        if await self.session.scalar(daily_conflict_statement) is not None:
+            raise ConflictError("Student already has an active class on this UTC date")
+
+        await self._ensure_class_session_capacity_available(class_session)
+        moved_from_booking_id = None
+        if existing_booking is not None:
+            moved_from_booking_id = existing_booking.id
+            existing_booking.status = BookingStatus.CANCELLED
+            self._add_booking_event(
+                booking_id=existing_booking.id,
+                event_type=BookingEventType.MOVED_BY_ADMIN,
+                actor_user_id=actor_user_id,
+                reason=reason or "moved by admin",
+                event_metadata={
+                    "source": "admin",
+                    "batch_schedule_day_id": str(day.id),
+                    "from_class_session_id": str(existing_booking.class_session_id),
+                    "to_class_session_id": str(class_session.id),
+                },
+            )
+            await self.session.flush()
+
+        booking = Booking(
+            student_id=student.id,
+            class_session_id=class_session.id,
+            status=BookingStatus.BOOKED,
+            booked_at=now,
+        )
+        self.session.add(booking)
+        await self.session.flush()
+        event_type = (
+            BookingEventType.MOVED_BY_ADMIN
+            if moved_from_booking_id is not None
+            else (
+                BookingEventType.ASSIGNED_BY_ADMIN
+                if admin_override
+                else BookingEventType.SELECTED_BY_STUDENT
+            )
+        )
+        source = "admin" if admin_override else "student"
+        self._add_booking_event(
+            booking_id=booking.id,
+            event_type=event_type,
+            actor_user_id=actor_user_id if admin_override else student.user_id,
+            reason=reason
+            or (
+                "moved by admin"
+                if moved_from_booking_id is not None
+                else "assigned by admin"
+                if admin_override
+                else "selected by student"
+            ),
+            event_metadata={
+                "source": source,
+                "batch_schedule_day_id": str(day.id),
+                "class_session_id": str(class_session.id),
+                "moved_from_booking_id": (
+                    str(moved_from_booking_id) if moved_from_booking_id else None
+                ),
+            },
+        )
+        await self.session.commit()
+        await self.session.refresh(booking)
+        return booking, moved_from_booking_id
+
+    async def remove_batch_day_selection(
+        self,
+        *,
+        student_id: UUID,
+        batch_schedule_day_id: UUID,
+        actor_user_id: UUID | None,
+        reason: str | None,
+    ) -> Booking:
+        await self._get_optional_user(actor_user_id)
+        booking = await self.session.scalar(
+            select(Booking)
+            .join(ClassSession, Booking.class_session_id == ClassSession.id)
+            .where(
+                Booking.student_id == student_id,
+                Booking.status == BookingStatus.BOOKED,
+                ClassSession.batch_schedule_day_id == batch_schedule_day_id,
+            )
+            .with_for_update()
+        )
+        if booking is None:
+            raise NotFoundError("Active batch-day selection not found")
+        booking.status = BookingStatus.CANCELLED
+        self._add_booking_event(
+            booking_id=booking.id,
+            event_type=BookingEventType.REMOVED_BY_ADMIN,
+            actor_user_id=actor_user_id,
+            reason=reason or "removed by admin",
+            event_metadata={
+                "source": "admin",
+                "batch_schedule_day_id": str(batch_schedule_day_id),
+                "class_session_id": str(booking.class_session_id),
+            },
+        )
+        await self.session.commit()
+        await self.session.refresh(booking)
+        return booking
+
     async def cancel_booking(
         self,
         booking_id: UUID,
@@ -197,6 +378,161 @@ class BookingService:
         await self.session.commit()
         await self.session.refresh(class_session)
         return class_session
+
+    async def admin_reschedule_batch_class_session(
+        self,
+        class_session_id: UUID,
+        reschedule_in: "AdminBatchClassReschedule",
+    ) -> list[Booking]:
+        await self._get_optional_user(reschedule_in.actor_user_id)
+        class_session = await self._get_class_session_for_update(class_session_id)
+        if class_session.program_type != StudentProgramType.BATCH:
+            raise ConflictError("Class session is not a batch class")
+        if class_session.status == ClassSessionStatus.CANCELLED:
+            raise ConflictError("Cancelled class sessions cannot be rescheduled")
+        if class_session.status == ClassSessionStatus.COMPLETED:
+            raise ConflictError("Completed class sessions cannot be rescheduled")
+
+        now = utc_now()
+        if _normalize_utc_datetime(class_session.starts_at) <= now:
+            raise ConflictError("Started class sessions cannot be rescheduled")
+        if reschedule_in.starts_at <= now:
+            raise ConflictError("Rescheduled class must start in the future")
+        if class_session.batch_schedule_day_id is not None:
+            batch_day = await self.session.get(
+                BatchScheduleDay,
+                class_session.batch_schedule_day_id,
+            )
+            if batch_day is None:
+                raise NotFoundError("Batch schedule day not found")
+            if reschedule_in.starts_at.date() != batch_day.schedule_date:
+                raise ConflictError(
+                    "Batch-day options must remain on their UTC schedule date"
+                )
+
+        teacher_id = (
+            reschedule_in.teacher_id
+            if "teacher_id" in reschedule_in.model_fields_set
+            else class_session.teacher_id
+        )
+        batch_slot = (
+            reschedule_in.batch_slot
+            if "batch_slot" in reschedule_in.model_fields_set
+            else class_session.batch_slot
+        )
+        capacity = (
+            reschedule_in.capacity
+            if "capacity" in reschedule_in.model_fields_set
+            else class_session.capacity
+        )
+        if batch_slot is None and class_session.display_label is None:
+            raise BadRequestError("batch_slot cannot be null")
+        if capacity is None:
+            raise BadRequestError("capacity cannot be null")
+
+        if teacher_id is not None:
+            teacher = await self.session.get(Teacher, teacher_id)
+            if teacher is None:
+                raise NotFoundError("Teacher not found")
+            teacher_overlap = await self.session.scalar(
+                select(ClassSession.id).where(
+                    ClassSession.id != class_session.id,
+                    ClassSession.teacher_id == teacher_id,
+                    ClassSession.status != ClassSessionStatus.CANCELLED,
+                    ClassSession.starts_at < reschedule_in.ends_at,
+                    ClassSession.ends_at > reschedule_in.starts_at,
+                )
+            )
+            if teacher_overlap is not None:
+                raise ConflictError("Teacher already has an overlapping class session")
+
+        group_overlap = await self.session.scalar(
+            select(ClassSession.id).where(
+                ClassSession.id != class_session.id,
+                ClassSession.batch_group_id == class_session.batch_group_id,
+                ClassSession.status != ClassSessionStatus.CANCELLED,
+                ClassSession.starts_at < reschedule_in.ends_at,
+                ClassSession.ends_at > reschedule_in.starts_at,
+            )
+        )
+        if group_overlap is not None:
+            raise ConflictError("Batch group already has an overlapping class session")
+
+        active_bookings = list(
+            await self.session.scalars(
+                select(Booking)
+                .where(
+                    Booking.class_session_id == class_session.id,
+                    Booking.status == BookingStatus.BOOKED,
+                )
+                .order_by(Booking.id.asc())
+                .with_for_update()
+            )
+        )
+        if capacity < len(active_bookings):
+            raise ConflictError("Capacity cannot be below the active booking count")
+
+        day_start = datetime.combine(reschedule_in.starts_at.date(), time.min, tzinfo=UTC)
+        day_end = day_start + timedelta(days=1)
+        for booking in active_bookings:
+            daily_conflict = await self.session.scalar(
+                select(Booking.id)
+                .join(ClassSession, Booking.class_session_id == ClassSession.id)
+                .where(
+                    Booking.student_id == booking.student_id,
+                    Booking.class_session_id != class_session.id,
+                    Booking.status != BookingStatus.CANCELLED,
+                    ClassSession.status != ClassSessionStatus.CANCELLED,
+                    ClassSession.starts_at >= day_start,
+                    ClassSession.starts_at < day_end,
+                )
+            )
+            if daily_conflict is not None:
+                raise ConflictError("A booked student already has an active class on this day")
+
+        old_timing = {
+            "class_session_id": str(class_session.id),
+            "starts_at": _normalize_utc_datetime(class_session.starts_at).isoformat(),
+            "ends_at": _normalize_utc_datetime(class_session.ends_at).isoformat(),
+            "teacher_id": str(class_session.teacher_id) if class_session.teacher_id else None,
+            "batch_slot": class_session.batch_slot.value if class_session.batch_slot else None,
+            "capacity": class_session.capacity,
+        }
+        new_timing = {
+            "class_session_id": str(class_session.id),
+            "starts_at": reschedule_in.starts_at.isoformat(),
+            "ends_at": reschedule_in.ends_at.isoformat(),
+            "teacher_id": str(teacher_id) if teacher_id else None,
+            "batch_slot": batch_slot.value if batch_slot else None,
+            "capacity": capacity,
+        }
+        reason = reschedule_in.reason or RESCHEDULE_REASON
+        for booking in active_bookings:
+            self._add_booking_event(
+                booking_id=booking.id,
+                event_type=BookingEventType.RESCHEDULED_FROM,
+                actor_user_id=reschedule_in.actor_user_id,
+                reason=reason,
+                event_metadata={"old": old_timing, "new": new_timing},
+            )
+            self._add_booking_event(
+                booking_id=booking.id,
+                event_type=BookingEventType.RESCHEDULED_TO,
+                actor_user_id=reschedule_in.actor_user_id,
+                reason=reason,
+                event_metadata={"old": old_timing, "new": new_timing},
+            )
+
+        class_session.starts_at = reschedule_in.starts_at
+        class_session.ends_at = reschedule_in.ends_at
+        class_session.teacher_id = teacher_id
+        class_session.batch_slot = batch_slot
+        class_session.capacity = capacity
+        await self.session.commit()
+        await self.session.refresh(class_session)
+        for booking in active_bookings:
+            await self.session.refresh(booking)
+        return active_bookings
 
     async def reschedule_one_on_one_booking(
         self,
@@ -742,6 +1078,19 @@ class BookingService:
         normalized_now = _normalize_utc_datetime(now)
         if normalized_now < access_starts_at or normalized_now >= access_ends_at:
             raise ConflictError("Student access window is not currently valid")
+
+    def _ensure_student_access_covers_class(
+        self,
+        student: Student,
+        class_starts_at: datetime,
+    ) -> None:
+        if student.access_starts_at is None or student.access_ends_at is None:
+            raise ConflictError("Student does not have an active access window")
+        starts_at = _normalize_utc_datetime(student.access_starts_at)
+        ends_at = _normalize_utc_datetime(student.access_ends_at)
+        class_time = _normalize_utc_datetime(class_starts_at)
+        if class_time < starts_at or class_time >= ends_at:
+            raise ConflictError("Student access does not cover this batch option")
 
     async def _ensure_no_booked_class_on_day(
         self,

@@ -1,7 +1,17 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, Index, Integer, Uuid, text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Uuid,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -21,6 +31,8 @@ class ClassSession(UUIDPrimaryKeyMixin, TimestampMixin, Base):
                 and teacher_availability_slot_id is not null
                 and batch_group_id is null
                 and batch_slot is null
+                and display_label is null
+                and batch_schedule_day_id is null
                 and capacity = 1
             )
             or
@@ -28,7 +40,7 @@ class ClassSession(UUIDPrimaryKeyMixin, TimestampMixin, Base):
                 program_type = 'batch'
                 and teacher_availability_slot_id is null
                 and batch_group_id is not null
-                and batch_slot is not null
+                and (batch_slot is not null or display_label is not null)
             )
             """,
             name="ck_class_sessions_program_shape",
@@ -61,6 +73,12 @@ class ClassSession(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         index=True,
         nullable=True,
     )
+    batch_schedule_day_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("batch_schedule_days.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
     program_type: Mapped[StudentProgramType] = mapped_column(
         Enum(
             StudentProgramType,
@@ -80,6 +98,8 @@ class ClassSession(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ),
         nullable=True,
     )
+    display_label: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    option_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[ClassSessionStatus] = mapped_column(

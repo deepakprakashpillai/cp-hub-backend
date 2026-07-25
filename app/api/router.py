@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.modules.admin.routes import router as admin_router
 from app.modules.batch_groups.routes import router as batch_groups_router
+from app.modules.booking_notes.routes import router as booking_notes_router
 from app.modules.bookings.routes import router as bookings_router
 from app.modules.classes.routes import router as classes_router
 from app.modules.leads.routes import router as leads_router
@@ -16,6 +17,11 @@ from app.modules.users.routes import router as users_router
 api_router = APIRouter()
 
 api_router.include_router(admin_router, prefix="/admin", tags=["admin"])
+api_router.include_router(
+    booking_notes_router,
+    prefix="/teacher",
+    tags=["teacher-booking-notes"],
+)
 api_router.include_router(batch_groups_router, prefix="/batch-groups", tags=["batch-groups"])
 api_router.include_router(users_router, prefix="/users", tags=["users"])
 api_router.include_router(students_router, prefix="/students", tags=["students"])

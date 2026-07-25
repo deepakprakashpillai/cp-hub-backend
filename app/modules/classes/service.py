@@ -1,12 +1,13 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, NotFoundError
 from app.core.pagination import Page, PaginationParams, paginate_scalars
 from app.modules.batch_groups.models import BatchGroup
+from app.modules.batch_schedule_days.models import BatchScheduleDay
 from app.modules.classes.models import ClassSession
 from app.modules.classes.schemas import BatchClassSessionCreate
 from app.modules.teachers.models import Teacher
@@ -26,8 +27,17 @@ class ClassSessionService:
         status: ClassSessionStatus | None = None,
         teacher_id: UUID | None = None,
         batch_group_id: UUID | None = None,
+        descending: bool = False,
     ) -> Page:
-        statement = select(ClassSession).order_by(ClassSession.starts_at.asc())
+        starts_at_order = (
+            ClassSession.starts_at.desc()
+            if descending
+            else ClassSession.starts_at.asc()
+        )
+        statement = select(ClassSession).order_by(
+            starts_at_order,
+            ClassSession.id.asc(),
+        )
         if program_type is not None:
             statement = statement.where(ClassSession.program_type == program_type)
         if starts_from is not None:
@@ -69,13 +79,41 @@ class ClassSessionService:
             starts_at=class_session_in.starts_at,
             ends_at=class_session_in.ends_at,
         )
+        schedule_date = class_session_in.starts_at.date()
+        batch_day = await self.session.scalar(
+            select(BatchScheduleDay).where(
+                BatchScheduleDay.batch_group_id == batch_group.id,
+                BatchScheduleDay.schedule_date == schedule_date,
+            )
+        )
+        if batch_day is None:
+            batch_day = BatchScheduleDay(
+                batch_group_id=batch_group.id,
+                schedule_date=schedule_date,
+                created_by_user_id=None,
+            )
+            self.session.add(batch_day)
+            await self.session.flush()
+            option_order = 1
+        else:
+            option_order = (
+                await self.session.scalar(
+                    select(func.count())
+                    .select_from(ClassSession)
+                    .where(ClassSession.batch_schedule_day_id == batch_day.id)
+                )
+                or 0
+            ) + 1
 
         class_session = ClassSession(
             teacher_id=class_session_in.teacher_id,
             teacher_availability_slot_id=None,
             batch_group_id=batch_group.id,
+            batch_schedule_day_id=batch_day.id,
             program_type=StudentProgramType.BATCH,
             batch_slot=class_session_in.batch_slot,
+            display_label=class_session_in.batch_slot.value.replace("_", " ").title(),
+            option_order=option_order,
             starts_at=class_session_in.starts_at,
             ends_at=class_session_in.ends_at,
             status=class_session_in.status,

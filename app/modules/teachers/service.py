@@ -1,10 +1,11 @@
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.core.pagination import Page, PaginationParams, paginate_scalars
+from app.modules.students.models import Student
 from app.modules.teachers.models import Teacher
 from app.modules.teachers.schemas import TeacherCreate, TeacherUpdate
 from app.modules.users.models import User
@@ -61,6 +62,13 @@ class TeacherService:
 
         for field, value in update_data.items():
             setattr(teacher, field, value)
+
+        if update_data.get("is_active") is False:
+            await self.session.execute(
+                update(Student)
+                .where(Student.assigned_teacher_id == teacher.id)
+                .values(assigned_teacher_id=None)
+            )
 
         await self.session.commit()
         await self.session.refresh(teacher)

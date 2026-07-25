@@ -61,6 +61,7 @@ class StudentRead(BaseModel):
     id: UUID
     user_id: UUID
     program_type: StudentProgramType
+    assigned_teacher_id: UUID | None
     status: StudentStatus
     access_starts_at: datetime | None
     access_ends_at: datetime | None

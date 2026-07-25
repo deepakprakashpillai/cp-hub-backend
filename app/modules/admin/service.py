@@ -3,10 +3,25 @@ from uuid import UUID
 
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
-from app.core.exceptions import BadRequestError, ConflictError
+from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.core.pagination import Page, PaginationParams, paginate_rows
 from app.modules.admin.schemas import (
+    AdminActivityActorSummary,
+    AdminActivityStudentSummary,
+    AdminBatchClassReschedule,
+    AdminBatchClassRescheduleResult,
+    AdminBatchGroupRead,
+    AdminBatchGroupSortBy,
+    AdminClassActivityRead,
+    AdminClassBatchGroupSummary,
+    AdminClassBookingCounts,
+    AdminClassRead,
+    AdminClassRescheduleResult,
+    AdminClassRosterBookingRead,
+    AdminClassStudentSummary,
+    AdminClassTeacherSummary,
     AdminDashboardBatchGroupSummary,
     AdminDashboardBookingSummary,
     AdminDashboardClassSummary,
@@ -15,6 +30,7 @@ from app.modules.admin.schemas import (
     AdminDashboardSummaryRead,
     AdminDashboardTeacherSummary,
     AdminDashboardWindowRead,
+    AdminPackageSortBy,
     AdminStudentAccessGrantCreate,
     AdminStudentAccessState,
     AdminStudentBatchGroupSet,
@@ -22,22 +38,45 @@ from app.modules.admin.schemas import (
     AdminStudentPaymentCreate,
     AdminStudentPaymentUpdate,
     AdminStudentRead,
+    AdminStudentSortBy,
+    AdminStudentUpdate,
     AdminTeacherCreate,
     AdminTeacherRead,
+    AdminTeacherSortBy,
+    SortOrder,
 )
 from app.modules.batch_groups.models import BatchGroup, StudentBatchMembership
 from app.modules.batch_groups.schemas import (
+    BatchGroupCreate,
     BatchGroupUpdate,
     BatchSessionBulkGenerate,
+    StudentBatchMembershipAssign,
     StudentBatchTransfer,
 )
 from app.modules.batch_groups.service import BatchGroupService
-from app.modules.bookings.models import Booking
+from app.modules.batch_schedule_days.schemas import (
+    BatchDayActionRequest,
+    BatchDayAllocationRequest,
+    BatchDayAllocationResult,
+    BatchDayBulkCancelRequest,
+    BatchDayBulkCancelResult,
+    BatchDayBulkCreate,
+    BatchDayBulkCreateResult,
+    BatchDayCreate,
+    BatchDayOptionCreate,
+    BatchDayOptionUpdate,
+    BatchScheduleDayRead,
+    BatchScheduleDefaultsUpdate,
+)
+from app.modules.batch_schedule_days.service import BatchScheduleDayService
+from app.modules.booking_notes.service import BookingNoteService
+from app.modules.bookings.models import Booking, BookingEvent
 from app.modules.bookings.schemas import (
     AdminAddStudentToClass,
     BatchBookingReschedule,
     BookingActionRequest,
     ClassAttendanceMark,
+    OneOnOneBookingCreate,
     OneOnOneBookingReschedule,
 )
 from app.modules.bookings.service import BookingService
@@ -45,7 +84,7 @@ from app.modules.classes.models import ClassSession
 from app.modules.classes.schemas import BatchClassSessionCreate
 from app.modules.classes.service import ClassSessionService
 from app.modules.packages.models import Package
-from app.modules.packages.schemas import PackageUpdate
+from app.modules.packages.schemas import PackageCreate, PackageUpdate
 from app.modules.packages.service import PackageService
 from app.modules.schedules.models import TeacherAvailabilityRule, TeacherAvailabilitySlot
 from app.modules.schedules.schemas import (
@@ -73,6 +112,8 @@ from app.modules.users.models import User
 from app.modules.users.schemas import UserCreate, UserUpdate
 from app.modules.users.service import UserService
 from app.shared.enums import (
+    AvailabilitySlotSource,
+    AvailabilitySlotStatus,
     BookingStatus,
     ClassSessionStatus,
     StudentProgramType,
@@ -148,11 +189,29 @@ class AdminService:
         program_type: StudentProgramType | None = None,
         access_state: AdminStudentAccessState | None = None,
         batch_group_id: UUID | None = None,
+        assigned_teacher_id: UUID | None = None,
+        sort_by: AdminStudentSortBy = AdminStudentSortBy.CREATED_AT,
+        sort_order: SortOrder = SortOrder.DESC,
     ) -> Page[AdminStudentRead]:
+        sort_columns = {
+            AdminStudentSortBy.CREATED_AT: Student.created_at,
+            AdminStudentSortBy.JOINED_AT: Student.joined_at,
+            AdminStudentSortBy.NAME: User.full_name,
+            AdminStudentSortBy.STATUS: Student.status,
+            AdminStudentSortBy.PROGRAM_TYPE: Student.program_type,
+            AdminStudentSortBy.ACCESS_ENDS_AT: Student.access_ends_at,
+        }
+        sort_column = sort_columns[sort_by]
+        sort_expression = (
+            sort_column.asc() if sort_order == SortOrder.ASC else sort_column.desc()
+        )
+        assigned_teacher_user = aliased(User)
         statement = (
-            select(Student, User)
+            select(Student, User, Teacher, assigned_teacher_user)
             .join(User, Student.user_id == User.id)
-            .order_by(Student.created_at.desc())
+            .outerjoin(Teacher, Student.assigned_teacher_id == Teacher.id)
+            .outerjoin(assigned_teacher_user, Teacher.user_id == assigned_teacher_user.id)
+            .order_by(sort_expression.nulls_last(), Student.id.asc())
         )
         q = _normalize_search_query(q)
         if q is not None:
@@ -177,9 +236,24 @@ class AdminService:
                 .where(StudentBatchMembership.batch_group_id == batch_group_id)
                 .where(StudentBatchMembership.is_active.is_(True))
             )
+        if assigned_teacher_id is not None:
+            statement = statement.where(
+                Student.assigned_teacher_id == assigned_teacher_id
+            )
         rows, total = await paginate_rows(self.session, statement, pagination)
         return Page(
-            items=[AdminStudentRead(student=student, user=user) for student, user in rows],
+            items=[
+                AdminStudentRead(
+                    student=student,
+                    user=user,
+                    assigned_teacher=(
+                        AdminTeacherRead(teacher=teacher, user=teacher_user)
+                        if teacher is not None and teacher_user is not None
+                        else None
+                    ),
+                )
+                for student, user, teacher, teacher_user in rows
+            ],
             total=total,
             page=pagination.page,
             page_size=pagination.page_size,
@@ -188,44 +262,81 @@ class AdminService:
     async def get_student(self, student_id: UUID) -> AdminStudentRead:
         student = await StudentService(self.session).get_student(student_id)
         user = await UserService(self.session).get_user(student.user_id)
-        return AdminStudentRead(student=student, user=user)
+        assigned_teacher = None
+        if student.assigned_teacher_id is not None:
+            teacher = await TeacherService(self.session).get_teacher(
+                student.assigned_teacher_id
+            )
+            teacher_user = await UserService(self.session).get_user(teacher.user_id)
+            assigned_teacher = AdminTeacherRead(teacher=teacher, user=teacher_user)
+        return AdminStudentRead(
+            student=student,
+            user=user,
+            assigned_teacher=assigned_teacher,
+        )
 
     async def update_student(
         self,
         student_id: UUID,
-        student_in: StudentUpdate,
+        student_in: AdminStudentUpdate,
     ) -> AdminStudentRead:
         update_data = student_in.model_dump(exclude_unset=True)
         program_type = update_data.pop("program_type", None)
+        assigned_teacher_id = update_data.pop("assigned_teacher_id", None)
+        assigned_teacher_was_set = "assigned_teacher_id" in student_in.model_fields_set
         if "program_type" in student_in.model_fields_set and program_type is None:
             raise BadRequestError("program_type cannot be null")
 
         student_service = StudentService(self.session)
+        current_student = await student_service.get_student(student_id)
+        final_program_type = program_type or current_student.program_type
+        if assigned_teacher_was_set and assigned_teacher_id is not None:
+            if final_program_type != StudentProgramType.ONE_ON_ONE:
+                raise BadRequestError(
+                    "Assigned teacher is only valid for one-on-one students"
+                )
+            teacher = await TeacherService(self.session).get_teacher(assigned_teacher_id)
+            if not teacher.is_active:
+                raise BadRequestError("Assigned teacher must be active")
+
         if update_data:
             student = await student_service.update_student(student_id, StudentUpdate(**update_data))
         else:
-            student = await student_service.get_student(student_id)
+            student = current_student
 
         if program_type is not None and program_type != student.program_type:
             await student_service.switch_program(
                 student_id,
                 StudentProgramSwitch(new_program_type=program_type),
             )
-            student = await student_service.get_student(student_id)
+        if assigned_teacher_was_set:
+            await student_service.set_assigned_teacher(student_id, assigned_teacher_id)
 
-        user = await UserService(self.session).get_user(student.user_id)
-        return AdminStudentRead(student=student, user=user)
+        return await self.get_student(student_id)
 
     async def list_teachers(
         self,
         pagination: PaginationParams,
         q: str | None = None,
         is_active: bool | None = None,
+        account_is_active: bool | None = None,
+        sort_by: AdminTeacherSortBy = AdminTeacherSortBy.CREATED_AT,
+        sort_order: SortOrder = SortOrder.DESC,
     ) -> Page[AdminTeacherRead]:
+        sort_columns = {
+            AdminTeacherSortBy.CREATED_AT: Teacher.created_at,
+            AdminTeacherSortBy.NAME: User.full_name,
+            AdminTeacherSortBy.DISPLAY_NAME: Teacher.display_name,
+            AdminTeacherSortBy.IS_ACTIVE: Teacher.is_active,
+        }
+        sort_column = sort_columns[sort_by]
+        sort_expression = (
+            sort_column.asc() if sort_order == SortOrder.ASC else sort_column.desc()
+        )
         statement = (
             select(Teacher, User)
             .join(User, Teacher.user_id == User.id)
-            .order_by(Teacher.created_at.desc())
+            .order_by(sort_expression.nulls_last(), Teacher.id.asc())
         )
         q = _normalize_search_query(q)
         if q is not None:
@@ -240,6 +351,8 @@ class AdminService:
             )
         if is_active is not None:
             statement = statement.where(Teacher.is_active.is_(is_active))
+        if account_is_active is not None:
+            statement = statement.where(User.is_active.is_(account_is_active))
         rows, total = await paginate_rows(self.session, statement, pagination)
         return Page(
             items=[AdminTeacherRead(teacher=teacher, user=user) for teacher, user in rows],
@@ -471,6 +584,9 @@ class AdminService:
                 batch_group_id=batch_group_in.batch_group_id,
                 assigned_by_user_id=batch_group_in.assigned_by_user_id,
                 reason=batch_group_in.reason,
+                allow_package_access_override=(
+                    batch_group_in.allow_package_access_override
+                ),
             ),
         )
 
@@ -488,14 +604,241 @@ class AdminService:
         self,
         pagination: PaginationParams,
         is_active: bool | None = None,
+        q: str | None = None,
+        sort_by: AdminBatchGroupSortBy = AdminBatchGroupSortBy.CREATED_AT,
+        sort_order: SortOrder = SortOrder.DESC,
     ) -> Page:
-        return await BatchGroupService(self.session).list_batch_groups(
-            pagination,
-            is_active=is_active,
+        now = utc_now()
+        active_members = (
+            select(
+                StudentBatchMembership.batch_group_id.label("batch_group_id"),
+                func.count().label("active_member_count"),
+            )
+            .where(StudentBatchMembership.is_active.is_(True))
+            .group_by(StudentBatchMembership.batch_group_id)
+            .subquery()
         )
 
-    async def get_batch_group(self, batch_group_id: UUID) -> BatchGroup:
-        return await BatchGroupService(self.session).get_batch_group(batch_group_id)
+        upcoming_sessions = (
+            select(
+                ClassSession.batch_group_id.label("batch_group_id"),
+                func.count().label("upcoming_scheduled_count"),
+            )
+            .where(
+                ClassSession.status == ClassSessionStatus.SCHEDULED,
+                ClassSession.starts_at > now,
+            )
+            .group_by(ClassSession.batch_group_id)
+            .subquery()
+        )
+        active_member_count = func.coalesce(active_members.c.active_member_count, 0)
+        upcoming_scheduled_count = func.coalesce(
+            upcoming_sessions.c.upcoming_scheduled_count,
+            0,
+        )
+        sort_columns = {
+            AdminBatchGroupSortBy.CREATED_AT: BatchGroup.created_at,
+            AdminBatchGroupSortBy.NAME: BatchGroup.name,
+            AdminBatchGroupSortBy.ACTIVE_MEMBER_COUNT: active_member_count,
+            AdminBatchGroupSortBy.UPCOMING_SCHEDULED_COUNT: upcoming_scheduled_count,
+            AdminBatchGroupSortBy.IS_ACTIVE: BatchGroup.is_active,
+        }
+        sort_column = sort_columns[sort_by]
+        order_expression = (
+            sort_column.asc() if sort_order == SortOrder.ASC else sort_column.desc()
+        )
+        statement = (
+            select(
+                BatchGroup,
+                active_member_count.label("active_member_count"),
+                upcoming_scheduled_count.label("upcoming_scheduled_count"),
+            )
+            .outerjoin(
+                active_members,
+                active_members.c.batch_group_id == BatchGroup.id,
+            )
+            .outerjoin(
+                upcoming_sessions,
+                upcoming_sessions.c.batch_group_id == BatchGroup.id,
+            )
+            .order_by(order_expression, BatchGroup.id.asc())
+        )
+        if is_active is not None:
+            statement = statement.where(BatchGroup.is_active.is_(is_active))
+        normalized_q = _normalize_search_query(q)
+        if normalized_q is not None:
+            statement = statement.where(BatchGroup.name.ilike(f"%{normalized_q}%"))
+
+        rows, total = await paginate_rows(self.session, statement, pagination)
+        return Page(
+            items=[
+                AdminBatchGroupRead.model_validate(
+                    {
+                        **_model_values(batch_group),
+                        "package": batch_group.package,
+                        "active_member_count": active_count,
+                        "upcoming_scheduled_count": upcoming_count,
+                    }
+                )
+                for batch_group, active_count, upcoming_count in rows
+            ],
+            total=total,
+            page=pagination.page,
+            page_size=pagination.page_size,
+        )
+
+    async def get_batch_schedule_defaults(self):
+        return await BatchScheduleDayService(self.session).get_defaults()
+
+    async def update_batch_schedule_defaults(self, defaults_in: BatchScheduleDefaultsUpdate):
+        return await BatchScheduleDayService(self.session).update_defaults(defaults_in)
+
+    async def create_batch_schedule_day(
+        self,
+        day_in: BatchDayCreate,
+    ) -> BatchScheduleDayRead:
+        return await BatchScheduleDayService(self.session).create_day(day_in)
+
+    async def create_batch_schedule_days_bulk(
+        self,
+        bulk_in: BatchDayBulkCreate,
+    ) -> BatchDayBulkCreateResult:
+        return await BatchScheduleDayService(self.session).create_days_bulk(bulk_in)
+
+    async def list_batch_schedule_days(
+        self,
+        pagination: PaginationParams,
+        *,
+        batch_group_id: UUID | None = None,
+        starts_from=None,
+        starts_to=None,
+    ) -> Page:
+        return await BatchScheduleDayService(self.session).list_days(
+            pagination,
+            batch_group_id=batch_group_id,
+            starts_from=starts_from,
+            starts_to=starts_to,
+        )
+
+    async def get_batch_schedule_day(self, day_id: UUID) -> BatchScheduleDayRead:
+        return await BatchScheduleDayService(self.session).get_day(day_id)
+
+    async def cancel_batch_schedule_day(
+        self,
+        day_id: UUID,
+        action_in: BatchDayActionRequest,
+    ) -> BatchScheduleDayRead:
+        return await BatchScheduleDayService(self.session).cancel_day(day_id, action_in)
+
+    async def cancel_batch_schedule_days_bulk(
+        self,
+        cancel_in: BatchDayBulkCancelRequest,
+    ) -> BatchDayBulkCancelResult:
+        return await BatchScheduleDayService(self.session).cancel_days_bulk(cancel_in)
+
+    async def add_batch_schedule_day_option(
+        self,
+        day_id: UUID,
+        option_in: BatchDayOptionCreate,
+    ) -> BatchScheduleDayRead:
+        return await BatchScheduleDayService(self.session).add_option(day_id, option_in)
+
+    async def update_batch_schedule_day_option(
+        self,
+        day_id: UUID,
+        class_session_id: UUID,
+        option_in: BatchDayOptionUpdate,
+    ) -> BatchScheduleDayRead:
+        return await BatchScheduleDayService(self.session).update_option(
+            day_id,
+            class_session_id,
+            option_in,
+        )
+
+    async def remove_batch_schedule_day_option(
+        self,
+        day_id: UUID,
+        class_session_id: UUID,
+    ) -> BatchScheduleDayRead:
+        return await BatchScheduleDayService(self.session).remove_option(
+            day_id,
+            class_session_id,
+        )
+
+    async def assign_batch_day_student(
+        self,
+        day_id: UUID,
+        student_id: UUID,
+        allocation_in: BatchDayAllocationRequest,
+    ) -> BatchDayAllocationResult:
+        booking, moved_from = await BookingService(self.session).select_batch_day_option(
+            student_id=student_id,
+            batch_schedule_day_id=day_id,
+            class_session_id=allocation_in.class_session_id,
+            admin_override=True,
+            actor_user_id=allocation_in.actor_user_id,
+            reason=allocation_in.reason,
+        )
+        return BatchDayAllocationResult(
+            booking=booking,
+            moved_from_booking_id=moved_from,
+        )
+
+    async def remove_batch_day_student(
+        self,
+        day_id: UUID,
+        student_id: UUID,
+        action_in: BatchDayActionRequest,
+    ) -> Booking:
+        return await BookingService(self.session).remove_batch_day_selection(
+            student_id=student_id,
+            batch_schedule_day_id=day_id,
+            actor_user_id=action_in.actor_user_id,
+            reason=action_in.reason,
+        )
+
+    async def create_batch_group(self, batch_group_in: BatchGroupCreate) -> BatchGroup:
+        return await BatchGroupService(self.session).create_batch_group(batch_group_in)
+
+    async def get_batch_group(self, batch_group_id: UUID) -> AdminBatchGroupRead:
+        now = utc_now()
+        row = (
+            await self.session.execute(
+                select(
+                    BatchGroup,
+                    select(func.count())
+                    .select_from(StudentBatchMembership)
+                    .where(
+                        StudentBatchMembership.batch_group_id == BatchGroup.id,
+                        StudentBatchMembership.is_active.is_(True),
+                    )
+                    .correlate(BatchGroup)
+                    .scalar_subquery()
+                    .label("active_member_count"),
+                    select(func.count())
+                    .select_from(ClassSession)
+                    .where(
+                        ClassSession.batch_group_id == BatchGroup.id,
+                        ClassSession.status == ClassSessionStatus.SCHEDULED,
+                        ClassSession.starts_at > now,
+                    )
+                    .correlate(BatchGroup)
+                    .scalar_subquery()
+                    .label("upcoming_scheduled_count"),
+                ).where(BatchGroup.id == batch_group_id)
+            )
+        ).one_or_none()
+        if row is None:
+            raise NotFoundError("Batch group not found")
+        batch_group, active_count, upcoming_count = row
+        return AdminBatchGroupRead.model_validate(
+            {
+                **_model_values(batch_group),
+                "package": batch_group.package,
+                "active_member_count": active_count,
+                "upcoming_scheduled_count": upcoming_count,
+            }
+        )
 
     async def update_batch_group(
         self,
@@ -522,8 +865,65 @@ class AdminService:
             is_active=is_active,
         )
 
-    async def list_packages(self, pagination: PaginationParams) -> Page:
-        return await PackageService(self.session).list_packages(pagination)
+    async def add_student_to_batch_group(
+        self,
+        batch_group_id: UUID,
+        membership_in: StudentBatchMembershipAssign,
+    ) -> StudentBatchMembership:
+        return await BatchGroupService(self.session).assign_student_to_batch_group(
+            batch_group_id,
+            membership_in,
+        )
+
+    async def remove_student_from_batch_group(
+        self,
+        batch_group_id: UUID,
+        student_id: UUID,
+        *,
+        reason: str | None,
+    ) -> StudentBatchMembership:
+        return await BatchGroupService(self.session).remove_student_from_batch_group(
+            batch_group_id,
+            student_id,
+            reason=reason,
+        )
+
+    async def list_packages(
+        self,
+        pagination: PaginationParams,
+        *,
+        q: str | None = None,
+        is_active: bool | None = None,
+        sort_by: AdminPackageSortBy = AdminPackageSortBy.CREATED_AT,
+        sort_order: SortOrder = SortOrder.DESC,
+    ) -> Page:
+        sort_columns = {
+            AdminPackageSortBy.CREATED_AT: Package.created_at,
+            AdminPackageSortBy.NAME: Package.name,
+            AdminPackageSortBy.DURATION_DAYS: Package.duration_days,
+            AdminPackageSortBy.PRICE_AMOUNT: Package.price_amount,
+            AdminPackageSortBy.IS_ACTIVE: Package.is_active,
+        }
+        sort_column = sort_columns[sort_by]
+        order_expression = (
+            sort_column.asc() if sort_order == SortOrder.ASC else sort_column.desc()
+        )
+        statement = select(Package).order_by(order_expression, Package.id.asc())
+        normalized_q = _normalize_search_query(q)
+        if normalized_q is not None:
+            statement = statement.where(Package.name.ilike(f"%{normalized_q}%"))
+        if is_active is not None:
+            statement = statement.where(Package.is_active.is_(is_active))
+        rows, total = await paginate_rows(self.session, statement, pagination)
+        return Page(
+            items=[row[0] for row in rows],
+            total=total,
+            page=pagination.page,
+            page_size=pagination.page_size,
+        )
+
+    async def create_package(self, package_in: PackageCreate) -> Package:
+        return await PackageService(self.session).create_package(package_in)
 
     async def get_package(self, package_id: UUID) -> Package:
         return await PackageService(self.session).get_package(package_id)
@@ -575,12 +975,18 @@ class AdminService:
         teacher_id: UUID | None = None,
         starts_from: datetime | None = None,
         starts_to: datetime | None = None,
+        status: AvailabilitySlotStatus | None = None,
+        source: AvailabilitySlotSource | None = None,
+        sort_order: SortOrder = SortOrder.ASC,
     ) -> Page:
         return await ScheduleService(self.session).list_teacher_availability_slots(
             pagination,
             teacher_id=teacher_id,
             starts_from=starts_from,
             starts_to=starts_to,
+            status=status,
+            source=source,
+            descending=sort_order == SortOrder.DESC,
         )
 
     async def create_teacher_availability_slot(
@@ -643,6 +1049,12 @@ class AdminService:
     ) -> ClassSession:
         return await ClassSessionService(self.session).create_batch_class_session(class_session_in)
 
+    async def create_one_on_one_booking(
+        self,
+        booking_in: OneOnOneBookingCreate,
+    ) -> Booking:
+        return await BookingService(self.session).create_one_on_one_booking(booking_in)
+
     async def list_class_sessions(
         self,
         pagination: PaginationParams,
@@ -652,29 +1064,275 @@ class AdminService:
         status: ClassSessionStatus | None = None,
         teacher_id: UUID | None = None,
         batch_group_id: UUID | None = None,
+        sort_order: SortOrder = SortOrder.ASC,
+        q: str | None = None,
     ) -> Page:
-        return await ClassSessionService(self.session).list_class_sessions(
-            pagination,
-            program_type=program_type,
-            starts_from=starts_from,
-            starts_to=starts_to,
-            status=status,
-            teacher_id=teacher_id,
-            batch_group_id=batch_group_id,
+        normalized_q = _normalize_search_query(q)
+        statement = self._admin_class_projection_statement(q=normalized_q)
+        if program_type is not None:
+            statement = statement.where(ClassSession.program_type == program_type)
+        if starts_from is not None:
+            statement = statement.where(ClassSession.starts_at >= starts_from)
+        if starts_to is not None:
+            statement = statement.where(ClassSession.starts_at <= starts_to)
+        if status is not None:
+            statement = statement.where(ClassSession.status == status)
+        if teacher_id is not None:
+            statement = statement.where(ClassSession.teacher_id == teacher_id)
+        if batch_group_id is not None:
+            statement = statement.where(ClassSession.batch_group_id == batch_group_id)
+
+        starts_at_order = (
+            ClassSession.starts_at.desc()
+            if sort_order == SortOrder.DESC
+            else ClassSession.starts_at.asc()
+        )
+        statement = statement.order_by(starts_at_order, ClassSession.id.asc())
+        rows, total = await paginate_rows(self.session, statement, pagination)
+        return Page(
+            items=[self._admin_class_from_row(row) for row in rows],
+            total=total,
+            page=pagination.page,
+            page_size=pagination.page_size,
         )
 
-    async def get_class_session(self, class_session_id: UUID) -> ClassSession:
-        return await ClassSessionService(self.session).get_class_session(class_session_id)
+    async def get_class_session(self, class_session_id: UUID) -> AdminClassRead:
+        row = (
+            await self.session.execute(
+                self._admin_class_projection_statement().where(
+                    ClassSession.id == class_session_id
+                )
+            )
+        ).one_or_none()
+        if row is None:
+            raise NotFoundError("Class session not found")
+        return self._admin_class_from_row(row)
+
+    async def list_class_roster(
+        self,
+        class_session_id: UUID,
+        pagination: PaginationParams,
+    ) -> Page:
+        await ClassSessionService(self.session).get_class_session(class_session_id)
+        statement = (
+            select(Booking, Student, User)
+            .join(Student, Student.id == Booking.student_id)
+            .join(User, User.id == Student.user_id)
+            .where(Booking.class_session_id == class_session_id)
+            .order_by(Booking.created_at.asc(), Booking.id.asc())
+        )
+        rows, total = await paginate_rows(self.session, statement, pagination)
+        return Page(
+            items=[
+                AdminClassRosterBookingRead.model_validate(
+                    {
+                        **_model_values(booking),
+                        "student": AdminClassStudentSummary(
+                            id=student.id,
+                            user_id=student.user_id,
+                            full_name=user.full_name,
+                            email=user.email,
+                            phone=user.phone,
+                            status=student.status,
+                        ),
+                    }
+                )
+                for booking, student, user in rows
+            ],
+            total=total,
+            page=pagination.page,
+            page_size=pagination.page_size,
+        )
+
+    async def list_class_activity(
+        self,
+        class_session_id: UUID,
+        pagination: PaginationParams,
+    ) -> Page:
+        await ClassSessionService(self.session).get_class_session(class_session_id)
+        student_user = aliased(User)
+        actor_user = aliased(User)
+        statement = (
+            select(BookingEvent, Booking, Student, student_user, actor_user)
+            .join(Booking, Booking.id == BookingEvent.booking_id)
+            .join(Student, Student.id == Booking.student_id)
+            .join(student_user, student_user.id == Student.user_id)
+            .outerjoin(actor_user, actor_user.id == BookingEvent.actor_user_id)
+            .where(Booking.class_session_id == class_session_id)
+            .order_by(BookingEvent.created_at.desc(), BookingEvent.id.desc())
+        )
+        rows, total = await paginate_rows(self.session, statement, pagination)
+        return Page(
+            items=[
+                AdminClassActivityRead(
+                    id=event.id,
+                    class_session_id=class_session_id,
+                    booking_id=booking.id,
+                    student=AdminActivityStudentSummary(
+                        id=student.id,
+                        full_name=student_identity.full_name,
+                        email=student_identity.email,
+                    ),
+                    event_type=event.event_type,
+                    reason=event.reason,
+                    metadata=event.event_metadata,
+                    actor=(
+                        AdminActivityActorSummary(
+                            id=actor.id,
+                            full_name=actor.full_name,
+                            role=actor.role,
+                        )
+                        if actor is not None
+                        else None
+                    ),
+                    actor_label=actor.full_name if actor is not None else "System",
+                    created_at=event.created_at,
+                )
+                for event, booking, student, student_identity, actor in rows
+            ],
+            total=total,
+            page=pagination.page,
+            page_size=pagination.page_size,
+        )
+
+    def _admin_class_projection_statement(self, *, q: str | None = None):
+        teacher_user = aliased(User)
+        primary_booking = aliased(Booking)
+        primary_student = aliased(Student)
+        primary_user = aliased(User)
+        booking_counts = (
+            select(
+                Booking.class_session_id.label("class_session_id"),
+                func.count().filter(Booking.status == BookingStatus.BOOKED).label("booked_count"),
+                func.count()
+                .filter(Booking.status == BookingStatus.CANCELLED)
+                .label("cancelled_count"),
+                func.count()
+                .filter(Booking.status == BookingStatus.ATTENDED)
+                .label("attended_count"),
+                func.count().filter(Booking.status == BookingStatus.MISSED).label("missed_count"),
+            )
+            .group_by(Booking.class_session_id)
+            .subquery()
+        )
+        statement = (
+            select(
+                ClassSession,
+                Teacher.id.label("teacher_summary_id"),
+                Teacher.display_name.label("teacher_display_name"),
+                Teacher.profile_photo_url.label("teacher_profile_photo_url"),
+                teacher_user.full_name.label("teacher_full_name"),
+                BatchGroup.id.label("batch_summary_id"),
+                BatchGroup.name.label("batch_name"),
+                BatchGroup.is_active.label("batch_is_active"),
+                primary_student.id.label("student_summary_id"),
+                primary_student.user_id.label("student_user_id"),
+                primary_student.status.label("student_status"),
+                primary_user.full_name.label("student_full_name"),
+                primary_user.email.label("student_email"),
+                primary_user.phone.label("student_phone"),
+                func.coalesce(booking_counts.c.booked_count, 0).label("booked_count"),
+                func.coalesce(booking_counts.c.cancelled_count, 0).label("cancelled_count"),
+                func.coalesce(booking_counts.c.attended_count, 0).label("attended_count"),
+                func.coalesce(booking_counts.c.missed_count, 0).label("missed_count"),
+            )
+            .outerjoin(Teacher, Teacher.id == ClassSession.teacher_id)
+            .outerjoin(teacher_user, teacher_user.id == Teacher.user_id)
+            .outerjoin(BatchGroup, BatchGroup.id == ClassSession.batch_group_id)
+            .outerjoin(
+                primary_booking,
+                (primary_booking.class_session_id == ClassSession.id)
+                & (primary_booking.status != BookingStatus.CANCELLED)
+                & (ClassSession.program_type == StudentProgramType.ONE_ON_ONE),
+            )
+            .outerjoin(primary_student, primary_student.id == primary_booking.student_id)
+            .outerjoin(primary_user, primary_user.id == primary_student.user_id)
+            .outerjoin(
+                booking_counts,
+                booking_counts.c.class_session_id == ClassSession.id,
+            )
+        )
+        if q is not None:
+            roster_user = aliased(User)
+            roster_student = aliased(Student)
+            roster_booking = aliased(Booking)
+            roster_match = exists(
+                select(roster_booking.id)
+                .join(roster_student, roster_student.id == roster_booking.student_id)
+                .join(roster_user, roster_user.id == roster_student.user_id)
+                .where(
+                    roster_booking.class_session_id == ClassSession.id,
+                    roster_booking.status != BookingStatus.CANCELLED,
+                    or_(
+                        roster_user.full_name.ilike(f"%{q}%"),
+                        roster_user.email.ilike(f"%{q}%"),
+                        roster_user.phone.ilike(f"%{q}%"),
+                    ),
+                )
+            )
+            statement = statement.where(
+                or_(
+                    teacher_user.full_name.ilike(f"%{q}%"),
+                    Teacher.display_name.ilike(f"%{q}%"),
+                    BatchGroup.name.ilike(f"%{q}%"),
+                    roster_match,
+                )
+            )
+        return statement
+
+    def _admin_class_from_row(self, row) -> AdminClassRead:
+        values = row._mapping
+        class_session = values[ClassSession]
+        teacher = None
+        if values["teacher_summary_id"] is not None:
+            teacher = AdminClassTeacherSummary(
+                id=values["teacher_summary_id"],
+                display_name=values["teacher_display_name"],
+                full_name=values["teacher_full_name"],
+                profile_photo_url=values["teacher_profile_photo_url"],
+            )
+        batch_group = None
+        if values["batch_summary_id"] is not None:
+            batch_group = AdminClassBatchGroupSummary(
+                id=values["batch_summary_id"],
+                name=values["batch_name"],
+                is_active=values["batch_is_active"],
+            )
+        primary_student = None
+        if values["student_summary_id"] is not None:
+            primary_student = AdminClassStudentSummary(
+                id=values["student_summary_id"],
+                user_id=values["student_user_id"],
+                full_name=values["student_full_name"],
+                email=values["student_email"],
+                phone=values["student_phone"],
+                status=values["student_status"],
+            )
+        return AdminClassRead.model_validate(
+            {
+                **_model_values(class_session),
+                "teacher": teacher,
+                "batch_group": batch_group,
+                "primary_student": primary_student,
+                "booking_counts": AdminClassBookingCounts(
+                    booked=values["booked_count"],
+                    cancelled=values["cancelled_count"],
+                    attended=values["attended_count"],
+                    missed=values["missed_count"],
+                ),
+            }
+        )
 
     async def cancel_class_session(
         self,
         class_session_id: UUID,
         cancel_in: BookingActionRequest,
-    ) -> ClassSession:
-        return await BookingService(self.session).admin_cancel_class_session(
+    ) -> AdminClassRead:
+        await BookingService(self.session).admin_cancel_class_session(
             class_session_id,
             cancel_in,
         )
+        return await self.get_class_session(class_session_id)
 
     async def add_student_to_class(
         self,
@@ -733,6 +1391,16 @@ class AdminService:
     ) -> Page:
         return await BookingService(self.session).list_booking_events(booking_id, pagination)
 
+    async def list_booking_notes(
+        self,
+        booking_id: UUID,
+        pagination: PaginationParams,
+    ) -> Page:
+        return await BookingNoteService(self.session).list_admin_booking_notes(
+            booking_id,
+            pagination,
+        )
+
     async def reschedule_one_on_one_booking(
         self,
         booking_id: UUID,
@@ -751,6 +1419,47 @@ class AdminService:
         return await BookingService(self.session).admin_reschedule_batch_booking(
             booking_id,
             reschedule_in,
+        )
+
+    async def reschedule_one_on_one_class(
+        self,
+        class_session_id: UUID,
+        reschedule_in: OneOnOneBookingReschedule,
+    ) -> AdminClassRescheduleResult:
+        booking = await self.session.scalar(
+            select(Booking).where(
+                Booking.class_session_id == class_session_id,
+                Booking.status == BookingStatus.BOOKED,
+            )
+        )
+        if booking is None:
+            class_session = await ClassSessionService(self.session).get_class_session(
+                class_session_id
+            )
+            if class_session.program_type != StudentProgramType.ONE_ON_ONE:
+                raise ConflictError("Class session is not one-on-one")
+            raise ConflictError("One-on-one class does not have an active booking")
+        new_booking = await BookingService(self.session).admin_reschedule_one_on_one_booking(
+            booking.id,
+            reschedule_in,
+        )
+        return AdminClassRescheduleResult(
+            class_session=await self.get_class_session(new_booking.class_session_id),
+            booking=new_booking,
+        )
+
+    async def reschedule_batch_class(
+        self,
+        class_session_id: UUID,
+        reschedule_in: AdminBatchClassReschedule,
+    ) -> AdminBatchClassRescheduleResult:
+        bookings = await BookingService(self.session).admin_reschedule_batch_class_session(
+            class_session_id,
+            reschedule_in,
+        )
+        return AdminBatchClassRescheduleResult(
+            class_session=await self.get_class_session(class_session_id),
+            bookings=bookings,
         )
 
 
@@ -774,6 +1483,10 @@ def _normalize_search_query(q: str | None) -> str | None:
         return None
     normalized = q.strip()
     return normalized or None
+
+
+def _model_values(model) -> dict:
+    return {key: value for key, value in vars(model).items() if not key.startswith("_")}
 
 
 def _student_access_state_clause(access_state: AdminStudentAccessState, now: datetime):

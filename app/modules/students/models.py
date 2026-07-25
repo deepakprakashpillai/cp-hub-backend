@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String, Uuid, func
+from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -10,6 +10,12 @@ from app.shared.enums import StudentProgramType, StudentStatus, enum_values
 
 class Student(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "students"
+    __table_args__ = (
+        CheckConstraint(
+            "program_type = 'one_on_one' OR assigned_teacher_id IS NULL",
+            name="ck_students_assigned_teacher_one_on_one",
+        ),
+    )
 
     user_id: Mapped[UUID] = mapped_column(
         Uuid,
@@ -39,6 +45,12 @@ class Student(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=False,
         default=StudentStatus.ENROLLED,
         server_default=StudentStatus.ENROLLED.value,
+    )
+    assigned_teacher_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("teachers.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
     )
     access_starts_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
