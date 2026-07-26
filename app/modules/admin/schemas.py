@@ -8,6 +8,7 @@ from app.modules.batch_groups.schemas import BatchGroupRead
 from app.modules.bookings.schemas import BookingRead
 from app.modules.classes.schemas import ClassSessionRead
 from app.modules.classes.schemas import normalize_utc_datetime as normalize_class_datetime
+from app.modules.packages.schemas import PackageSummary
 from app.modules.student_access_grants.schemas import StudentAccessGrantRead
 from app.modules.student_payments.schemas import (
     StudentPaymentRead,
@@ -67,6 +68,11 @@ class AdminPackageSortBy(StrEnum):
     DURATION_DAYS = "duration_days"
     PRICE_AMOUNT = "price_amount"
     IS_ACTIVE = "is_active"
+
+
+class AdminPaymentSortBy(StrEnum):
+    PAID_AT = "paid_at"
+    AMOUNT_PAID = "amount_paid"
 
 
 class SortOrder(StrEnum):
@@ -138,6 +144,10 @@ class AdminStudentPaymentUpdate(BaseModel):
         if self.paid_at is not None:
             self.paid_at = normalize_paid_at(self.paid_at)
         return self
+
+
+class AdminPaymentCreate(AdminStudentPaymentCreate):
+    student_id: UUID
 
 
 class AdminStudentAccessGrantCreate(BaseModel):
@@ -329,6 +339,13 @@ class AdminDashboardPaymentSummary(BaseModel):
     total_amount_paid: int
 
 
+class AdminDashboardActionItems(BaseModel):
+    no_access: int
+    expired_access: int
+    unconverted_enrolled_leads: int
+    attendance_due: int
+
+
 class AdminTeacherAvailabilityGenerationResult(BaseModel):
     rules_checked: int
     slots_created: int
@@ -344,10 +361,41 @@ class AdminDashboardSummaryRead(BaseModel):
     classes: AdminDashboardClassSummary
     bookings: AdminDashboardBookingSummary
     payments: AdminDashboardPaymentSummary
+    action_items: AdminDashboardActionItems
 
 
 class AdminStudentPaymentRead(StudentPaymentRead):
     pass
+
+
+class AdminPaymentStudentSummary(BaseModel):
+    id: UUID
+    full_name: str
+    email: str
+    phone: str | None
+
+
+class AdminPaymentRead(StudentPaymentRead):
+    student: AdminPaymentStudentSummary
+    package: PackageSummary | None = None
+
+
+class AdminPaymentMethodSummary(BaseModel):
+    payment_method: PaymentMethod
+    count: int
+    total_amount_paid: int
+
+
+class AdminPaymentCurrencySummary(BaseModel):
+    currency: str
+    count: int
+    total_amount_paid: int
+    average_amount_paid: int
+    methods: list[AdminPaymentMethodSummary]
+
+
+class AdminPaymentSummaryRead(BaseModel):
+    currencies: list[AdminPaymentCurrencySummary]
 
 
 class AdminStudentAccessGrantRead(StudentAccessGrantRead):

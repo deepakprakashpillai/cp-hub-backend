@@ -10,6 +10,7 @@ from sqlalchemy.dialects import postgresql
 from app.core.exceptions import BadRequestError
 from app.core.pagination import PaginationParams
 from app.modules.admin.schemas import (
+    AdminPaymentCreate,
     AdminStudentAccessGrantCreate,
     AdminStudentAccessState,
     AdminStudentBatchGroupSet,
@@ -133,6 +134,19 @@ def test_admin_student_payment_create_normalizes_paid_at_to_utc() -> None:
     )
 
     assert payment.currency == "INR"
+    assert payment.paid_at == datetime(2026, 7, 20, 4, 30, tzinfo=UTC)
+
+
+def test_admin_payment_create_requires_student_and_normalizes_paid_at() -> None:
+    student_id = uuid4()
+    payment = AdminPaymentCreate(
+        student_id=student_id,
+        amount_paid=50000,
+        payment_method=PaymentMethod.UPI,
+        paid_at=datetime.fromisoformat("2026-07-20T10:00:00+05:30"),
+    )
+
+    assert payment.student_id == student_id
     assert payment.paid_at == datetime(2026, 7, 20, 4, 30, tzinfo=UTC)
 
 
@@ -1142,7 +1156,7 @@ async def test_admin_user_update_delegates_to_user_service(
 @pytest.mark.asyncio
 async def test_admin_dashboard_summary_returns_aggregate_counts() -> None:
     session = FakeSession()
-    session.scalar = AsyncMock(side_effect=[100, 55, 8, 12, 4])
+    session.scalar = AsyncMock(side_effect=[100, 55, 8, 6, 4, 3, 12, 4])
     session.execute = AsyncMock(
         side_effect=[
             FakeResult(
@@ -1198,6 +1212,10 @@ async def test_admin_dashboard_summary_returns_aggregate_counts() -> None:
     assert summary.bookings.missed == 0
     assert summary.payments.count == 4
     assert summary.payments.total_amount_paid == 125000
+    assert summary.action_items.no_access == 6
+    assert summary.action_items.expired_access == 8
+    assert summary.action_items.unconverted_enrolled_leads == 4
+    assert summary.action_items.attendance_due == 3
 
 
 @pytest.mark.asyncio
@@ -1298,6 +1316,38 @@ async def test_admin_student_payment_uses_path_student_id(
         "amount_paid": 50000,
         "payment_method": PaymentMethod.UPI,
     }
+
+
+@pytest.mark.asyncio
+async def test_admin_global_payment_create_uses_body_student_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    student_id = uuid4()
+    payment_id = uuid4()
+    calls = {}
+
+    async def fake_create_payment(self, payment_in):
+        calls["student_id"] = payment_in.student_id
+        return type("Payment", (), {"id": payment_id})()
+
+    async def fake_get_payment(self, received_payment_id):
+        calls["payment_id"] = received_payment_id
+        return "payment-read"
+
+    monkeypatch.setattr(StudentPaymentService, "create_payment", fake_create_payment)
+    monkeypatch.setattr(AdminService, "get_payment", fake_get_payment)
+
+    result = await AdminService(session).create_payment(
+        AdminPaymentCreate(
+            student_id=student_id,
+            amount_paid=50000,
+            payment_method=PaymentMethod.UPI,
+        )
+    )
+
+    assert result == "payment-read"
+    assert calls == {"student_id": student_id, "payment_id": payment_id}
 
 
 @pytest.mark.asyncio

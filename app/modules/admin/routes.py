@@ -17,6 +17,10 @@ from app.modules.admin.schemas import (
     AdminClassRosterBookingRead,
     AdminDashboardSummaryRead,
     AdminPackageSortBy,
+    AdminPaymentCreate,
+    AdminPaymentRead,
+    AdminPaymentSortBy,
+    AdminPaymentSummaryRead,
     AdminStudentAccessGrantCreate,
     AdminStudentAccessGrantRead,
     AdminStudentAccessState,
@@ -71,6 +75,8 @@ from app.modules.bookings.schemas import (
     OneOnOneBookingReschedule,
 )
 from app.modules.classes.schemas import BatchClassSessionCreate, ClassSessionRead
+from app.modules.leads.schemas import LeadConversionRead, LeadConvert
+from app.modules.leads.service import LeadService
 from app.modules.packages.schemas import PackageCreate, PackageRead, PackageUpdate
 from app.modules.schedules.schemas import (
     TeacherAvailabilityBlockCreate,
@@ -90,6 +96,7 @@ from app.shared.enums import (
     AvailabilitySlotStatus,
     BookingStatus,
     ClassSessionStatus,
+    PaymentMethod,
     StudentProgramType,
     StudentStatus,
 )
@@ -106,7 +113,10 @@ StudentSortByQuery = Annotated[AdminStudentSortBy, Query()]
 TeacherSortByQuery = Annotated[AdminTeacherSortBy, Query()]
 BatchGroupSortByQuery = Annotated[AdminBatchGroupSortBy, Query()]
 PackageSortByQuery = Annotated[AdminPackageSortBy, Query()]
+PaymentSortByQuery = Annotated[AdminPaymentSortBy, Query()]
 SortOrderQuery = Annotated[SortOrder, Query()]
+PaymentMethodQuery = Annotated[PaymentMethod | None, Query()]
+CurrencyQuery = Annotated[str | None, Query(min_length=3, max_length=3)]
 AvailabilitySlotStatusQuery = Annotated[AvailabilitySlotStatus | None, Query()]
 AvailabilitySlotSourceQuery = Annotated[AvailabilitySlotSource | None, Query()]
 ClassSessionStatusQuery = Annotated[ClassSessionStatus | None, Query()]
@@ -137,6 +147,90 @@ async def get_dashboard_summary(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/payments/summary", response_model=AdminPaymentSummaryRead)
+async def get_payment_summary(
+    session: DBSession,
+    q: SearchQuery = None,
+    payment_method: PaymentMethodQuery = None,
+    package_id: UUID | None = None,
+    currency: CurrencyQuery = None,
+    paid_from: DatetimeQuery = None,
+    paid_to: DatetimeQuery = None,
+) -> AdminPaymentSummaryRead:
+    try:
+        return await AdminService(session).get_payment_summary(
+            q=q,
+            payment_method=payment_method,
+            package_id=package_id,
+            currency=currency,
+            paid_from=normalize_query_datetime(paid_from),
+            paid_to=normalize_query_datetime(paid_to),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/payments", response_model=Page[AdminPaymentRead])
+async def list_payments(
+    session: DBSession,
+    pagination: Pagination,
+    q: SearchQuery = None,
+    payment_method: PaymentMethodQuery = None,
+    package_id: UUID | None = None,
+    currency: CurrencyQuery = None,
+    paid_from: DatetimeQuery = None,
+    paid_to: DatetimeQuery = None,
+    sort_by: PaymentSortByQuery = AdminPaymentSortBy.PAID_AT,
+    sort_order: SortOrderQuery = SortOrder.DESC,
+) -> Page[AdminPaymentRead]:
+    try:
+        return await AdminService(session).list_payments(
+            pagination,
+            q=q,
+            payment_method=payment_method,
+            package_id=package_id,
+            currency=currency,
+            paid_from=normalize_query_datetime(paid_from),
+            paid_to=normalize_query_datetime(paid_to),
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/payments", response_model=AdminPaymentRead, status_code=status.HTTP_201_CREATED)
+async def create_payment(
+    payment_in: AdminPaymentCreate,
+    session: DBSession,
+) -> AdminPaymentRead:
+    return await AdminService(session).create_payment(payment_in)
+
+
+@router.patch("/payments/{payment_id}", response_model=AdminPaymentRead)
+async def update_payment(
+    payment_id: UUID,
+    payment_in: AdminStudentPaymentUpdate,
+    session: DBSession,
+) -> AdminPaymentRead:
+    return await AdminService(session).update_payment(payment_id, payment_in)
+
+
+@router.delete("/payments/{payment_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_payment(payment_id: UUID, session: DBSession) -> Response:
+    await AdminService(session).delete_payment(payment_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/leads/{lead_id}/convert", response_model=LeadConversionRead)
+async def convert_lead(
+    lead_id: UUID,
+    conversion: LeadConvert,
+    session: DBSession,
+) -> LeadConversionRead:
+    return await LeadService(session).convert_lead(lead_id, conversion)
 
 
 @router.get("/students", response_model=Page[AdminStudentRead])
