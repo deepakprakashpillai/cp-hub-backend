@@ -9,4 +9,5 @@ compose=(docker compose --project-name cp-hub --env-file /etc/cp-hub/backend.env
 "${compose[@]}" up -d --wait db
 "${compose[@]}" run --rm --no-deps api uv run --locked --no-dev alembic upgrade head
 "${compose[@]}" up -d --no-deps api
-curl --fail --retry 10 --retry-delay 2 --retry-connrefused http://127.0.0.1:8000/health
+curl --fail --silent --show-error --max-time 5 --retry 15 --retry-delay 2 --retry-all-errors \
+  http://127.0.0.1:8000/health
