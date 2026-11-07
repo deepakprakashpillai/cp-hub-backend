@@ -280,11 +280,7 @@ class ScheduleService:
             raise ConflictError("Teacher already has an overlapping active slot")
 
     def _ensure_no_overlaps_within_batch(self, slots: list[TeacherAvailabilitySlotCreate]) -> None:
-        active_slots = [
-            slot
-            for slot in slots
-            if slot.status != AvailabilitySlotStatus.CANCELLED
-        ]
+        active_slots = [slot for slot in slots if slot.status != AvailabilitySlotStatus.CANCELLED]
 
         for index, slot in enumerate(active_slots):
             for other_slot in active_slots[index + 1 :]:

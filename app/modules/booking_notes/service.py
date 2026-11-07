@@ -9,6 +9,8 @@ from app.modules.booking_notes.models import BookingNote
 from app.modules.booking_notes.schemas import BookingNoteCreate, BookingNoteUpdate
 from app.modules.bookings.models import Booking
 from app.modules.classes.models import ClassSession
+from app.modules.notifications.service import NotificationService
+from app.modules.students.models import Student
 from app.modules.teachers.models import Teacher
 from app.shared.utils import utc_now
 
@@ -36,6 +38,22 @@ class BookingNoteService:
             visibility=note_in.visibility,
         )
         self.session.add(booking_note)
+        await self.session.flush()
+        if booking_note.visibility.value == "student_visible":
+            student = await self.session.get(Student, booking.student_id)
+            if student is not None:
+                await NotificationService(self.session).emit_to_users(
+                    event_type="feedback.published",
+                    aggregate_type="booking_note",
+                    aggregate_id=booking_note.id,
+                    dedupe_key=f"notification:feedback:{booking_note.id}",
+                    recipient_user_ids=[student.user_id],
+                    title="New teacher feedback",
+                    body="Your teacher shared feedback from a class.",
+                    category="feedback",
+                    priority="medium",
+                    action_url="/student/feedbacks",
+                )
         await self.session.commit()
         await self.session.refresh(booking_note)
         return booking_note
@@ -68,9 +86,7 @@ class BookingNoteService:
         if booking_note.teacher_id != teacher_id:
             raise BadRequestError("Teacher does not own this booking note")
 
-        _, class_session = await self._get_booking_and_class_session(
-            booking_note.booking_id
-        )
+        _, class_session = await self._get_booking_and_class_session(booking_note.booking_id)
         await self._validate_teacher_ownership(teacher_id, class_session)
 
         update_data = note_in.model_dump(exclude_unset=True)

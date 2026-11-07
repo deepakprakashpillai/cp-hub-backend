@@ -5,6 +5,11 @@ def enum_values(enum_class: type[StrEnum]) -> list[str]:
     return [item.value for item in enum_class]
 
 
+class SortOrder(StrEnum):
+    ASC = "asc"
+    DESC = "desc"
+
+
 class UserRole(StrEnum):
     ADMIN = "admin"
     STUDENT = "student"
@@ -93,6 +98,7 @@ class BookingEventType(StrEnum):
     BOOKED = "booked"
     CANCELLED_BY_STUDENT = "cancelled_by_student"
     CANCELLED_BY_ADMIN = "cancelled_by_admin"
+    CANCELLED_BY_TEACHER = "cancelled_by_teacher"
     RESCHEDULED_FROM = "rescheduled_from"
     RESCHEDULED_TO = "rescheduled_to"
     CLASS_CANCELLED_EMPTY = "class_cancelled_empty"

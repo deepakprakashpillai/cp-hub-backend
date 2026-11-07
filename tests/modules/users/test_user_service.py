@@ -1,5 +1,5 @@
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -16,6 +16,8 @@ class FakeSession:
         self.user = user
         self.get = AsyncMock(return_value=user)
         self.scalar = AsyncMock(return_value=existing_user)
+        self.scalars = AsyncMock(return_value=[])
+        self.add = Mock()
         self.commit = AsyncMock()
         self.refresh = AsyncMock()
 
@@ -55,7 +57,7 @@ async def test_user_update_changes_account_fields() -> None:
     assert updated.email == "updated@example.com"
     assert updated.phone == "12345"
     assert updated.is_active is False
-    session.scalar.assert_awaited_once()
+    assert session.scalar.await_count >= 1
     session.commit.assert_awaited_once()
     session.refresh.assert_awaited_once_with(existing_user)
 

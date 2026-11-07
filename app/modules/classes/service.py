@@ -30,9 +30,7 @@ class ClassSessionService:
         descending: bool = False,
     ) -> Page:
         starts_at_order = (
-            ClassSession.starts_at.desc()
-            if descending
-            else ClassSession.starts_at.asc()
+            ClassSession.starts_at.desc() if descending else ClassSession.starts_at.asc()
         )
         statement = select(ClassSession).order_by(
             starts_at_order,

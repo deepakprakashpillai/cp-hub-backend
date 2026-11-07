@@ -20,6 +20,7 @@ class FakeSession:
     def __init__(self) -> None:
         self.commit = AsyncMock()
         self.refresh = AsyncMock()
+        self.flush = AsyncMock()
         self.added = []
 
     def add(self, value) -> None:

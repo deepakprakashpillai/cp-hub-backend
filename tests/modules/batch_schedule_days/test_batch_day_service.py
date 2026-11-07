@@ -6,13 +6,16 @@ from uuid import uuid4
 import pytest
 
 from app.core.exceptions import ConflictError
+from app.modules.batch_schedule_days.query_service import BatchScheduleDayQueryService
 from app.modules.batch_schedule_days.schemas import (
     BatchDayActionRequest,
     BatchDayBulkCancelRequest,
     BatchDayBulkCreate,
     BatchDayOptionCreate,
 )
-from app.modules.batch_schedule_days.service import BatchScheduleDayService
+from app.modules.batch_schedule_days.service import (
+    _BatchScheduleDayOperations as BatchScheduleDayService,
+)
 from app.shared.enums import BatchScheduleDayStatus, DayOfWeek
 
 
@@ -90,7 +93,11 @@ async def test_cancel_already_cancelled_day_is_idempotent(
     monkeypatch.setattr(service, "_validate_days_can_be_cancelled", AsyncMock())
     cancel_locked = AsyncMock()
     monkeypatch.setattr(service, "_cancel_locked_day", cancel_locked)
-    monkeypatch.setattr(service, "get_day", AsyncMock(return_value=expected))
+    monkeypatch.setattr(
+        BatchScheduleDayQueryService,
+        "get_day",
+        AsyncMock(return_value=expected),
+    )
 
     result = await service.cancel_day(day_id, BatchDayActionRequest(reason="duplicate"))
 
@@ -120,9 +127,7 @@ async def test_bulk_cancel_validates_all_days_before_mutating(
     monkeypatch.setattr(service, "_cancel_locked_day", cancel_locked)
 
     with pytest.raises(ConflictError, match="Past batch schedule day"):
-        await service.cancel_days_bulk(
-            BatchDayBulkCancelRequest(day_ids=[day.id for day in days])
-        )
+        await service.cancel_days_bulk(BatchDayBulkCancelRequest(day_ids=[day.id for day in days]))
 
     cancel_locked.assert_not_awaited()
     session.commit.assert_not_awaited()

@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BadRequestError, NotFoundError
 from app.core.pagination import Page, PaginationParams, paginate_scalars
+from app.modules.notifications.service import NotificationService
 from app.modules.packages.models import Package
 from app.modules.student_payments.models import StudentPayment
 from app.modules.student_payments.schemas import StudentPaymentCreate, StudentPaymentUpdate
@@ -42,6 +43,8 @@ class StudentPaymentService:
 
         payment = StudentPayment(**payment_in.model_dump())
         self.session.add(payment)
+        await self.session.flush()
+        await self._emit_payment_notification(payment, "recorded", "medium")
         await self.session.commit()
         await self.session.refresh(payment)
         return payment
@@ -73,14 +76,50 @@ class StudentPaymentService:
         for field, value in update_data.items():
             setattr(payment, field, value)
 
+        await self._emit_payment_notification(payment, "updated", "medium")
         await self.session.commit()
         await self.session.refresh(payment)
         return payment
 
     async def delete_payment(self, payment_id: UUID) -> None:
         payment = await self.get_payment(payment_id)
+        await self._emit_payment_notification(payment, "removed", "high")
         await self.session.delete(payment)
         await self.session.commit()
+
+    async def _emit_payment_notification(
+        self, payment: StudentPayment, action: str, priority: str
+    ) -> None:
+        student = await self.session.get(Student, payment.student_id)
+        if student is None:
+            return
+        await NotificationService(self.session).emit_to_users(
+            event_type=f"payment.{action}",
+            aggregate_type="student_payment",
+            aggregate_id=payment.id,
+            dedupe_key=f"notification:payment:{action}:{payment.id}",
+            recipient_user_ids=[student.user_id],
+            title="Payment record updated",
+            body=(
+                "A payment record was removed."
+                if action == "removed"
+                else f"A payment record was {action}."
+            ),
+            category="payments",
+            priority=priority,
+            action_url="/student",
+            data={
+                "student_id": str(student.id),
+                "payment_id": str(payment.id),
+                "amount_minor": payment.amount_paid,
+                "currency": payment.currency,
+                "payment_method": payment.payment_method.value,
+                "paid_at": payment.paid_at.isoformat(),
+                "package_name": None,
+            },
+            actor_user_id=payment.created_by_user_id,
+            include_admins=True,
+        )
 
     async def _validate_references(
         self,

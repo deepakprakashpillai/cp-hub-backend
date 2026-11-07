@@ -7,14 +7,14 @@ from fastapi import APIRouter, Query, status
 from app.api.deps import DBSession, Pagination
 from app.core.pagination import Page
 from app.modules.batch_groups.schemas import StudentBatchMembershipRead, StudentBatchTransfer
-from app.modules.batch_groups.service import BatchGroupService
+from app.modules.batch_groups.service import BatchMembershipService
 from app.modules.batch_schedule_days.schemas import (
     BatchDayAllocationResult,
     BatchDayStudentSelection,
     StudentBatchScheduleDayRead,
 )
-from app.modules.batch_schedule_days.service import BatchScheduleDayService
-from app.modules.bookings.service import BookingService
+from app.modules.batch_schedule_days.service import BatchScheduleDayQueryService
+from app.modules.bookings.service import BookingCreationService
 from app.modules.students.schemas import (
     StudentCreate,
     StudentProgramChangeRead,
@@ -23,6 +23,7 @@ from app.modules.students.schemas import (
     StudentUpdate,
 )
 from app.modules.students.service import StudentService
+from app.modules.students.workflows import StudentProgramWorkflow
 
 router = APIRouter()
 DateQuery = Annotated[date | None, Query()]
@@ -76,7 +77,7 @@ async def switch_student_program(
     switch_in: StudentProgramSwitch,
     session: DBSession,
 ) -> StudentProgramChangeRead:
-    return await StudentService(session).switch_program(student_id, switch_in)
+    return await StudentProgramWorkflow(session).switch_program(student_id, switch_in)
 
 
 @router.post("/{student_id}/batch-transfer", response_model=StudentBatchMembershipRead)
@@ -85,7 +86,9 @@ async def transfer_student_batch_group(
     transfer_in: StudentBatchTransfer,
     session: DBSession,
 ) -> StudentBatchMembershipRead:
-    return await BatchGroupService(session).transfer_student_batch_group(student_id, transfer_in)
+    return await BatchMembershipService(session).transfer_student_batch_group(
+        student_id, transfer_in
+    )
 
 
 @router.get("/{student_id}/batch-memberships", response_model=Page[StudentBatchMembershipRead])
@@ -94,7 +97,7 @@ async def list_student_batch_memberships(
     session: DBSession,
     pagination: Pagination,
 ) -> Page[StudentBatchMembershipRead]:
-    return await BatchGroupService(session).list_student_batch_memberships(
+    return await BatchMembershipService(session).list_student_batch_memberships(
         student_id,
         pagination,
     )
@@ -111,7 +114,7 @@ async def list_student_batch_schedule_days(
     starts_from: DateQuery = None,
     starts_to: DateQuery = None,
 ) -> Page[StudentBatchScheduleDayRead]:
-    return await BatchScheduleDayService(session).list_student_days(
+    return await BatchScheduleDayQueryService(session).list_student_days(
         student_id,
         pagination,
         starts_from=starts_from,
@@ -129,7 +132,7 @@ async def select_student_batch_day_option(
     selection_in: BatchDayStudentSelection,
     session: DBSession,
 ) -> BatchDayAllocationResult:
-    booking, moved_from = await BookingService(session).select_batch_day_option(
+    booking, moved_from = await BookingCreationService(session).select_batch_day_option(
         student_id=student_id,
         batch_schedule_day_id=day_id,
         class_session_id=selection_in.class_session_id,

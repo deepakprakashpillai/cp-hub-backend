@@ -5,10 +5,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.core.pagination import Page, PaginationParams, paginate_scalars
-from app.modules.batch_groups.service import BatchGroupService
-from app.modules.bookings.service import BookingService
+from app.modules.notifications.service import NotificationService
 from app.modules.students.models import Student, StudentProgramChange
-from app.modules.students.schemas import StudentCreate, StudentProgramSwitch, StudentUpdate
+from app.modules.students.schemas import StudentCreate, StudentUpdate
 from app.modules.teachers.models import Teacher
 from app.modules.users.models import User
 from app.shared.enums import StudentProgramType, StudentStatus, UserRole
@@ -62,6 +61,7 @@ class StudentService:
 
     async def update_student(self, student_id: UUID, student_in: StudentUpdate) -> Student:
         student = await self.get_student(student_id)
+        previous_status = student.status
         update_data = student_in.model_dump(exclude_unset=True)
 
         for non_nullable_field in ("program_type", "status"):
@@ -87,6 +87,35 @@ class StudentService:
         for field, value in update_data.items():
             setattr(student, field, value)
 
+        if "status" in update_data and previous_status != student.status:
+            restricted = student.status in {
+                StudentStatus.PAUSED,
+                StudentStatus.COMPLETED,
+                StudentStatus.CANCELLED,
+            }
+            await NotificationService(self.session).emit_to_users(
+                event_type="student.status_changed",
+                aggregate_type="student",
+                aggregate_id=student.id,
+                dedupe_key=f"notification:student-status:{student.id}:{student.status.value}",
+                recipient_user_ids=[student.user_id],
+                title="Student status updated",
+                body=(
+                    "Your learning access status has changed."
+                    if restricted
+                    else "Your student profile is now active."
+                ),
+                category="account",
+                priority="high" if restricted else "medium",
+                action_url="/student",
+                data={
+                    "student_id": str(student.id),
+                    "previous_status": previous_status.value,
+                    "current_status": student.status.value,
+                },
+                include_admins=True,
+            )
+
         await self.session.commit()
         await self.session.refresh(student)
         return student
@@ -97,13 +126,12 @@ class StudentService:
         assigned_teacher_id: UUID | None,
     ) -> Student:
         student = await self.get_student(student_id)
+        previous_teacher_id = student.assigned_teacher_id
         if (
             assigned_teacher_id is not None
             and student.program_type != StudentProgramType.ONE_ON_ONE
         ):
-            raise BadRequestError(
-                "Assigned teacher is only valid for one-on-one students"
-            )
+            raise BadRequestError("Assigned teacher is only valid for one-on-one students")
 
         if assigned_teacher_id is not None:
             teacher = await self.session.get(Teacher, assigned_teacher_id)
@@ -113,49 +141,63 @@ class StudentService:
                 raise BadRequestError("Assigned teacher must be active")
 
         student.assigned_teacher_id = assigned_teacher_id
+        service = NotificationService(self.session)
+        if previous_teacher_id != assigned_teacher_id:
+            await service.emit_to_users(
+                event_type="student.teacher_assignment_changed",
+                aggregate_type="student",
+                aggregate_id=student.id,
+                dedupe_key=(
+                    "notification:student-teacher:"
+                    f"{student.id}:{assigned_teacher_id or 'unassigned'}"
+                ),
+                recipient_user_ids=[student.user_id],
+                title="Your assigned teacher changed",
+                body=(
+                    "Your permanent teacher assignment was removed."
+                    if assigned_teacher_id is None
+                    else "A teacher has been assigned to your one-on-one learning."
+                ),
+                category="updates",
+                priority="high" if assigned_teacher_id is None else "medium",
+                action_url="/student",
+                data={
+                    "student_id": str(student.id),
+                    "teacher_id": str(assigned_teacher_id) if assigned_teacher_id else None,
+                    "teacher_name": teacher.display_name
+                    if assigned_teacher_id is not None
+                    else None,
+                    "assignment_status": "assigned"
+                    if assigned_teacher_id is not None
+                    else "removed",
+                },
+                include_admins=True,
+            )
+            if assigned_teacher_id is not None:
+                teacher = await self.session.get(Teacher, assigned_teacher_id)
+                if teacher is not None:
+                    await service.emit_to_users(
+                        event_type="teacher.student_assignment_changed",
+                        aggregate_type="student",
+                        aggregate_id=student.id,
+                        dedupe_key=f"notification:teacher-assignment:{student.id}:{teacher.id}",
+                        recipient_user_ids=[teacher.user_id],
+                        title="Student assignment updated",
+                        body="A student has been assigned to your one-on-one roster.",
+                        category="updates",
+                        priority="medium",
+                        action_url="/teacher/students",
+                        data={
+                            "student_id": str(student.id),
+                            "student_name": (
+                                await self.session.get(User, student.user_id)
+                            ).full_name,
+                            "teacher_id": str(teacher.id),
+                        },
+                    )
         await self.session.commit()
         await self.session.refresh(student)
         return student
-
-    async def switch_program(
-        self,
-        student_id: UUID,
-        switch_in: StudentProgramSwitch,
-    ) -> StudentProgramChange:
-        student = await self.get_student(student_id)
-        if student.program_type == switch_in.new_program_type:
-            raise BadRequestError("Student is already in this program")
-
-        if switch_in.changed_by_user_id is not None:
-            user = await self.session.get(User, switch_in.changed_by_user_id)
-            if user is None:
-                raise NotFoundError("User not found")
-
-        change = StudentProgramChange(
-            student_id=student.id,
-            old_program_type=student.program_type,
-            new_program_type=switch_in.new_program_type,
-            changed_by_user_id=switch_in.changed_by_user_id,
-            reason=switch_in.reason,
-        )
-        student.program_type = switch_in.new_program_type
-        if switch_in.new_program_type == StudentProgramType.BATCH:
-            student.assigned_teacher_id = None
-
-        self.session.add(change)
-        await BookingService(self.session).cancel_future_bookings_for_student(
-            student_id=student.id,
-            commit=False,
-        )
-        if switch_in.new_program_type == StudentProgramType.ONE_ON_ONE:
-            await BatchGroupService(self.session).end_active_student_membership(
-                student_id=student.id,
-                reason=switch_in.reason,
-                commit=False,
-            )
-        await self.session.commit()
-        await self.session.refresh(change)
-        return change
 
     async def list_program_changes(
         self,
@@ -175,7 +217,5 @@ class StudentService:
         access_starts_at,
         access_ends_at,
     ) -> None:
-        if status == StudentStatus.ACTIVE and (
-            access_starts_at is None or access_ends_at is None
-        ):
+        if status == StudentStatus.ACTIVE and (access_starts_at is None or access_ends_at is None):
             raise BadRequestError("Active students must have access start and end datetimes")

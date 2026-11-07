@@ -41,3 +41,7 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         default=True,
         server_default=true(),
     )
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    auth_provider_subject: Mapped[str | None] = mapped_column(
+        String(255), unique=True, nullable=True
+    )

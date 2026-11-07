@@ -11,6 +11,7 @@ from app.core.exceptions import BadRequestError
 from app.modules.leads.models import Lead
 from app.modules.leads.schemas import LeadConvert
 from app.modules.leads.service import LeadService
+from app.modules.leads.workflows import LeadConversionWorkflow
 from app.modules.students.service import StudentService
 from app.modules.users.service import UserService
 from app.shared.enums import LeadStatus, StudentProgramType
@@ -104,7 +105,7 @@ async def test_enrolled_lead_conversion_creates_linked_student(
     monkeypatch.setattr(UserService, "create_user", fake_create_user)
     monkeypatch.setattr(StudentService, "create_student", fake_create_student)
 
-    result = await LeadService(session).convert_lead(
+    result = await LeadConversionWorkflow(session).convert_lead(
         lead.id,
         LeadConvert(email="ADA@example.com", program_type=StudentProgramType.BATCH),
     )

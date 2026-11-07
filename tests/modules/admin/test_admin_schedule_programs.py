@@ -10,9 +10,13 @@ from app.modules.admin.schemas import (
     AdminPackageSortBy,
     SortOrder,
 )
-from app.modules.admin.service import AdminService
 from app.modules.bookings.models import Booking, BookingEvent
 from app.modules.classes.service import ClassSessionService
+from app.modules.read_models.services import (
+    AdminCatalogQueryService,
+    AdminCatalogService,
+    AdminClassService,
+)
 from app.modules.students.models import Student
 from app.modules.users.models import User
 from app.shared.enums import (
@@ -23,6 +27,14 @@ from app.shared.enums import (
     StudentStatus,
     UserRole,
 )
+
+
+class AdminService(
+    AdminCatalogQueryService,
+    AdminCatalogService,
+    AdminClassService,
+):
+    """Test harness spanning the focused admin query services."""
 
 
 @pytest.mark.asyncio
@@ -44,7 +56,7 @@ async def test_admin_class_projection_search_and_filters_apply_before_pagination
         )
         return [], 37
 
-    monkeypatch.setattr("app.modules.admin.service.paginate_rows", fake_paginate_rows)
+    monkeypatch.setattr("app.modules.read_models.class_services.paginate_rows", fake_paginate_rows)
 
     result = await AdminService(session).list_class_sessions(
         pagination,
@@ -86,7 +98,7 @@ async def test_admin_batch_group_projection_filters_and_sorts_aggregate_count(
         )
         return [], 2
 
-    monkeypatch.setattr("app.modules.admin.service.paginate_rows", fake_paginate_rows)
+    monkeypatch.setattr("app.modules.read_models.catalog_queries.paginate_rows", fake_paginate_rows)
 
     result = await AdminService(session).list_batch_groups(
         pagination,
@@ -122,7 +134,9 @@ async def test_admin_package_search_filter_and_sort_apply_before_pagination(
         )
         return [], 7
 
-    monkeypatch.setattr("app.modules.admin.service.paginate_rows", fake_paginate_rows)
+    monkeypatch.setattr(
+        "app.modules.read_models.catalog_services.paginate_rows", fake_paginate_rows
+    )
 
     result = await AdminService(session).list_packages(
         pagination,
@@ -211,7 +225,7 @@ async def test_admin_class_activity_aggregates_actor_and_system_events(
         "get_class_session",
         fake_get_class_session,
     )
-    monkeypatch.setattr("app.modules.admin.service.paginate_rows", fake_paginate_rows)
+    monkeypatch.setattr("app.modules.read_models.class_services.paginate_rows", fake_paginate_rows)
 
     result = await AdminService(session).list_class_activity(
         class_session_id,

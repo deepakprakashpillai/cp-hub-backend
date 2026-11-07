@@ -23,14 +23,20 @@ from app.modules.admin.schemas import (
     AdminTeacherSortBy,
     SortOrder,
 )
-from app.modules.admin.service import AdminService
+from app.modules.auth.service import AuthService
+from app.modules.batch_groups.lifecycle_service import BatchGroupLifecycleService
+from app.modules.batch_groups.membership_service import BatchMembershipService
 from app.modules.batch_groups.schemas import (
     BatchGroupUpdate,
     BatchSessionBulkGenerate,
     StudentBatchTransfer,
 )
-from app.modules.batch_groups.service import BatchGroupService
+from app.modules.batch_groups.session_generation_service import BatchSessionGenerationService
 from app.modules.booking_notes.service import BookingNoteService
+from app.modules.bookings.attendance_service import BookingAttendanceService
+from app.modules.bookings.cancellation_service import BookingCancellationService
+from app.modules.bookings.query_service import BookingQueryService
+from app.modules.bookings.reschedule_service import BookingRescheduleService
 from app.modules.bookings.schemas import (
     AdminAddStudentToClass,
     BatchBookingReschedule,
@@ -39,11 +45,21 @@ from app.modules.bookings.schemas import (
     ClassAttendanceRecord,
     OneOnOneBookingReschedule,
 )
-from app.modules.bookings.service import BookingService
 from app.modules.classes.schemas import BatchClassSessionCreate
 from app.modules.classes.service import ClassSessionService
 from app.modules.packages.schemas import PackageUpdate
 from app.modules.packages.service import PackageService
+from app.modules.read_models.services import (
+    AdminAccountWorkflow,
+    AdminBatchScheduleService,
+    AdminCatalogQueryService,
+    AdminCatalogService,
+    AdminClassService,
+    AdminDashboardQueryService,
+    AdminFinanceService,
+    AdminSchedulingService,
+    AdminStudentWorkflowService,
+)
 from app.modules.schedules.schemas import (
     TeacherAvailabilityBlockCreate,
     TeacherAvailabilityRuleCreate,
@@ -58,9 +74,11 @@ from app.modules.student_payments.service import StudentPaymentService
 from app.modules.students.models import Student
 from app.modules.students.schemas import StudentProgramSwitch, StudentUpdate
 from app.modules.students.service import StudentService
+from app.modules.students.workflows import StudentProgramWorkflow
 from app.modules.teachers.models import Teacher
 from app.modules.teachers.schemas import TeacherUpdate
 from app.modules.teachers.service import TeacherService
+from app.modules.teachers.workflows import TeacherLifecycleWorkflow
 from app.modules.users.models import User
 from app.modules.users.schemas import UserUpdate
 from app.modules.users.service import UserService
@@ -83,6 +101,24 @@ class FakeSession:
     def __init__(self) -> None:
         self.commit = AsyncMock()
         self.refresh = AsyncMock()
+        self.flush = AsyncMock()
+        self.scalar = AsyncMock(return_value=None)
+        self.scalars = AsyncMock(return_value=[])
+        self.add = Mock()
+
+
+class AdminService(
+    AdminAccountWorkflow,
+    AdminDashboardQueryService,
+    AdminFinanceService,
+    AdminStudentWorkflowService,
+    AdminCatalogQueryService,
+    AdminBatchScheduleService,
+    AdminCatalogService,
+    AdminSchedulingService,
+    AdminClassService,
+):
+    """Test harness spanning the focused admin services."""
 
 
 class FakeResult:
@@ -193,7 +229,9 @@ async def test_admin_student_list_returns_nested_user_data(
         assert "students.created_at DESC NULLS LAST" in sql
         return [(student, user, None, None)], 11
 
-    monkeypatch.setattr("app.modules.admin.service.paginate_rows", fake_paginate_rows)
+    monkeypatch.setattr(
+        "app.modules.read_models.account_services.paginate_rows", fake_paginate_rows
+    )
 
     page = await AdminService(session).list_students(pagination)
 
@@ -441,7 +479,9 @@ async def test_admin_student_list_sorts_by_name_ascending(
         assert received_pagination is pagination
         return [], 0
 
-    monkeypatch.setattr("app.modules.admin.service.paginate_rows", fake_paginate_rows)
+    monkeypatch.setattr(
+        "app.modules.read_models.account_services.paginate_rows", fake_paginate_rows
+    )
 
     await AdminService(session).list_students(
         pagination,
@@ -468,7 +508,9 @@ async def test_admin_student_list_applies_search_and_filters(
         assert received_pagination is pagination
         return [], 0
 
-    monkeypatch.setattr("app.modules.admin.service.paginate_rows", fake_paginate_rows)
+    monkeypatch.setattr(
+        "app.modules.read_models.account_services.paginate_rows", fake_paginate_rows
+    )
 
     page = await AdminService(session).list_students(
         pagination,
@@ -526,7 +568,9 @@ async def test_admin_teacher_list_returns_nested_user_data(
         assert "teachers.id ASC" in sql
         return [(teacher, user)], 1
 
-    monkeypatch.setattr("app.modules.admin.service.paginate_rows", fake_paginate_rows)
+    monkeypatch.setattr(
+        "app.modules.read_models.account_services.paginate_rows", fake_paginate_rows
+    )
 
     page = await AdminService(session).list_teachers(pagination)
 
@@ -549,7 +593,9 @@ async def test_admin_teacher_list_applies_search_and_independent_active_filters(
         assert received_pagination is pagination
         return [], 0
 
-    monkeypatch.setattr("app.modules.admin.service.paginate_rows", fake_paginate_rows)
+    monkeypatch.setattr(
+        "app.modules.read_models.account_services.paginate_rows", fake_paginate_rows
+    )
 
     page = await AdminService(session).list_teachers(
         pagination,
@@ -628,7 +674,9 @@ async def test_admin_teacher_list_supports_whitelisted_sorting(
         captured["sql"] = str(statement.compile(dialect=postgresql.dialect()))
         return [], 0
 
-    monkeypatch.setattr("app.modules.admin.service.paginate_rows", fake_paginate_rows)
+    monkeypatch.setattr(
+        "app.modules.read_models.account_services.paginate_rows", fake_paginate_rows
+    )
 
     await AdminService(session).list_teachers(
         pagination,
@@ -698,7 +746,7 @@ async def test_admin_student_update_uses_program_switch_for_program_type(
         return user
 
     monkeypatch.setattr(StudentService, "update_student", fake_update_student)
-    monkeypatch.setattr(StudentService, "switch_program", fake_switch_program)
+    monkeypatch.setattr(StudentProgramWorkflow, "switch_program", fake_switch_program)
     monkeypatch.setattr(StudentService, "get_student", fake_get_student)
     monkeypatch.setattr(UserService, "get_user", fake_get_user)
 
@@ -755,7 +803,7 @@ async def test_admin_teacher_update_returns_nested_user_data(
         calls["user_id"] = received_user_id
         return user
 
-    monkeypatch.setattr(TeacherService, "update_teacher", fake_update_teacher)
+    monkeypatch.setattr(TeacherLifecycleWorkflow, "update_teacher", fake_update_teacher)
     monkeypatch.setattr(UserService, "get_user", fake_get_user)
 
     result = await AdminService(session).update_teacher(
@@ -797,12 +845,12 @@ async def test_student_program_switch_to_batch_clears_assigned_teacher(
 
     monkeypatch.setattr(StudentService, "get_student", fake_get_student)
     monkeypatch.setattr(
-        BookingService,
+        BookingCancellationService,
         "cancel_future_bookings_for_student",
         fake_cancel_future_bookings,
     )
 
-    await StudentService(session).switch_program(
+    await StudentProgramWorkflow(session).switch_program(
         student.id,
         StudentProgramSwitch(new_program_type=StudentProgramType.BATCH),
     )
@@ -831,7 +879,7 @@ async def test_teacher_deactivation_clears_student_assignments(
 
     monkeypatch.setattr(TeacherService, "get_teacher", fake_get_teacher)
 
-    await TeacherService(session).update_teacher(
+    await TeacherLifecycleWorkflow(session).update_teacher(
         teacher.id,
         TeacherUpdate(is_active=False),
     )
@@ -1265,6 +1313,21 @@ async def test_admin_teacher_create_commits_once_after_user_and_teacher(
     monkeypatch.setattr(UserService, "create_user", fake_create_user)
     monkeypatch.setattr(TeacherService, "create_teacher", fake_create_teacher)
 
+    async def fake_issue_password_token(self, user, purpose):
+        assert user is user
+        assert purpose == "setup"
+        return "setup-token"
+
+    async def fake_send_password_setup_email(email, token):
+        assert email == "teacher@example.com"
+        assert token == "setup-token"
+
+    monkeypatch.setattr(AuthService, "issue_password_token", fake_issue_password_token)
+    monkeypatch.setattr(
+        "app.modules.read_models.account_services.send_password_setup_email",
+        fake_send_password_setup_email,
+    )
+
     created_user, created_teacher = await AdminService(session).create_teacher(
         AdminTeacherCreate(
             full_name="Teacher One",
@@ -1281,7 +1344,7 @@ async def test_admin_teacher_create_commits_once_after_user_and_teacher(
         "teacher_user_id": user.id,
         "teacher_commit": False,
     }
-    session.commit.assert_awaited_once()
+    assert session.commit.await_count == 2
     assert session.refresh.await_count == 2
 
 
@@ -1464,7 +1527,7 @@ async def test_admin_student_batch_group_uses_transfer_logic(
         return membership
 
     monkeypatch.setattr(
-        BatchGroupService,
+        BatchMembershipService,
         "transfer_student_batch_group",
         fake_transfer_student_batch_group,
     )
@@ -1501,7 +1564,7 @@ async def test_admin_student_program_switch_delegates_to_student_service(
         calls["switch_in"] = switch_in
         return program_change
 
-    monkeypatch.setattr(StudentService, "switch_program", fake_switch_program)
+    monkeypatch.setattr(StudentProgramWorkflow, "switch_program", fake_switch_program)
 
     switch_in = StudentProgramSwitch(new_program_type=StudentProgramType.ONE_ON_ONE)
     created_change = await AdminService(session).switch_student_program(student_id, switch_in)
@@ -1561,7 +1624,11 @@ async def test_admin_batch_session_generation_delegates_to_batch_group_service(
         calls["generation_in"] = generation_in
         return class_sessions
 
-    monkeypatch.setattr(BatchGroupService, "generate_batch_sessions", fake_generate_batch_sessions)
+    monkeypatch.setattr(
+        BatchSessionGenerationService,
+        "generate_batch_sessions",
+        fake_generate_batch_sessions,
+    )
 
     generation_in = BatchSessionBulkGenerate(
         starts_from=datetime(2026, 7, 20, tzinfo=UTC).date(),
@@ -1634,7 +1701,7 @@ async def test_admin_class_list_delegates_with_filters(
         assert received_pagination is pagination
         return [], 0
 
-    monkeypatch.setattr("app.modules.admin.service.paginate_rows", fake_paginate_rows)
+    monkeypatch.setattr("app.modules.read_models.class_services.paginate_rows", fake_paginate_rows)
 
     result = await AdminService(session).list_class_sessions(
         pagination,
@@ -1678,8 +1745,16 @@ async def test_admin_batch_group_update_and_void_delegate(
         calls["void_id"] = received_batch_group_id
         return voided_group
 
-    monkeypatch.setattr(BatchGroupService, "update_batch_group", fake_update_batch_group)
-    monkeypatch.setattr(BatchGroupService, "void_batch_group", fake_void_batch_group)
+    monkeypatch.setattr(
+        BatchGroupLifecycleService,
+        "update_batch_group",
+        fake_update_batch_group,
+    )
+    monkeypatch.setattr(
+        BatchGroupLifecycleService,
+        "void_batch_group",
+        fake_void_batch_group,
+    )
 
     update_in = BatchGroupUpdate(name="Updated Batch")
     updated_result = await AdminService(session).update_batch_group(batch_group_id, update_in)
@@ -1708,7 +1783,7 @@ async def test_admin_add_student_to_class_delegates_to_admin_booking_method(
         return booking
 
     monkeypatch.setattr(
-        BookingService,
+        BookingAttendanceService,
         "admin_add_student_to_class",
         fake_admin_add_student_to_class,
     )
@@ -1737,7 +1812,11 @@ async def test_admin_class_attendance_delegates_to_booking_service(
         calls["attendance_in"] = attendance_in
         return bookings
 
-    monkeypatch.setattr(BookingService, "mark_class_attendance", fake_mark_class_attendance)
+    monkeypatch.setattr(
+        BookingAttendanceService,
+        "mark_class_attendance",
+        fake_mark_class_attendance,
+    )
 
     attendance_in = ClassAttendanceMark(
         records=[ClassAttendanceRecord(booking_id=uuid4(), status=BookingStatus.ATTENDED)]
@@ -1766,7 +1845,7 @@ async def test_admin_class_cancel_delegates_to_booking_service(
         return class_session
 
     monkeypatch.setattr(
-        BookingService,
+        BookingCancellationService,
         "admin_cancel_class_session",
         fake_admin_cancel_class_session,
     )
@@ -1802,7 +1881,11 @@ async def test_admin_booking_cancel_delegates_to_admin_cancel(
         calls["cancel_in"] = cancel_in
         return booking
 
-    monkeypatch.setattr(BookingService, "admin_cancel_booking", fake_admin_cancel_booking)
+    monkeypatch.setattr(
+        BookingCancellationService,
+        "admin_cancel_booking",
+        fake_admin_cancel_booking,
+    )
 
     cancel_in = BookingActionRequest(reason="admin cancellation")
     result = await AdminService(session).cancel_booking(booking_id, cancel_in)
@@ -1833,7 +1916,7 @@ async def test_admin_booking_list_delegates_with_filters(
         calls["filters"] = filters
         return bookings
 
-    monkeypatch.setattr(BookingService, "list_bookings", fake_list_bookings)
+    monkeypatch.setattr(BookingQueryService, "list_bookings", fake_list_bookings)
 
     result = await AdminService(session).list_bookings(
         pagination,
@@ -1874,7 +1957,7 @@ async def test_admin_one_on_one_reschedule_delegates_to_admin_reschedule(
         return booking
 
     monkeypatch.setattr(
-        BookingService,
+        BookingRescheduleService,
         "admin_reschedule_one_on_one_booking",
         fake_admin_reschedule_one_on_one_booking,
     )
@@ -1904,7 +1987,7 @@ async def test_admin_batch_reschedule_delegates_to_admin_reschedule(
         return booking
 
     monkeypatch.setattr(
-        BookingService,
+        BookingRescheduleService,
         "admin_reschedule_batch_booking",
         fake_admin_reschedule_batch_booking,
     )

@@ -6,19 +6,21 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.exceptions import BadRequestError, ConflictError
+from app.modules.bookings.cancellation_service import BookingCancellationService
 from app.modules.bookings.models import Booking
 from app.modules.bookings.schemas import (
     BookingActionRequest,
     BookingAttendanceMark,
     ClassAttendanceMark,
 )
-from app.modules.bookings.service import BookingService
+from app.modules.bookings.service import _BookingOperations as BookingService
 from app.modules.classes.models import ClassSession
 from app.modules.schedules.models import TeacherAvailabilitySlot
 from app.modules.students.models import Student
 from app.shared.enums import (
     AvailabilitySlotSource,
     AvailabilitySlotStatus,
+    BookingEventType,
     BookingStatus,
     ClassSessionStatus,
     StudentProgramType,
@@ -282,19 +284,19 @@ async def test_admin_class_cancel_cancels_booked_bookings_and_reopens_future_one
         status=AvailabilitySlotStatus.BOOKED,
     )
     session = FakeSession(bookings=[booking], slot=slot)
-    service = BookingService(session)
+    service = BookingCancellationService(session)
 
     async def fake_get_class_session_for_update(self, class_session_id):
         assert class_session_id == class_session.id
         return class_session
 
     monkeypatch.setattr(
-        BookingService,
+        BookingCancellationService,
         "_get_class_session_for_update",
         fake_get_class_session_for_update,
     )
     monkeypatch.setattr(
-        "app.modules.bookings.service.utc_now",
+        "app.modules.bookings.cancellation_service.utc_now",
         lambda: datetime(2026, 7, 22, tzinfo=UTC),
     )
 
@@ -312,3 +314,61 @@ async def test_admin_class_cancel_cancels_booked_bookings_and_reopens_future_one
     assert session.added[0].reason == "teacher unavailable"
     session.commit.assert_awaited_once()
     session.refresh.assert_awaited_once_with(class_session)
+
+
+@pytest.mark.asyncio
+async def test_teacher_class_cancel_only_cancels_selected_batch_option_bookings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    teacher_user_id = uuid4()
+    class_session = ClassSession(
+        id=uuid4(),
+        teacher_id=uuid4(),
+        batch_group_id=uuid4(),
+        batch_schedule_day_id=uuid4(),
+        program_type=StudentProgramType.BATCH,
+        display_label="Morning",
+        starts_at=datetime(2026, 7, 23, 10, tzinfo=UTC),
+        ends_at=datetime(2026, 7, 23, 11, tzinfo=UTC),
+        status=ClassSessionStatus.SCHEDULED,
+        capacity=10,
+    )
+    selected_booking = Booking(
+        id=uuid4(),
+        student_id=uuid4(),
+        class_session_id=class_session.id,
+        status=BookingStatus.BOOKED,
+    )
+    other_option_booking = Booking(
+        id=uuid4(),
+        student_id=uuid4(),
+        class_session_id=uuid4(),
+        status=BookingStatus.BOOKED,
+    )
+    session = FakeSession(bookings=[selected_booking])
+    service = BookingCancellationService(session)
+
+    monkeypatch.setattr(
+        BookingCancellationService,
+        "_get_class_session_for_update",
+        AsyncMock(return_value=class_session),
+    )
+    monkeypatch.setattr(BookingCancellationService, "_get_optional_user", AsyncMock())
+    monkeypatch.setattr(
+        "app.modules.bookings.cancellation_service.utc_now",
+        lambda: datetime(2026, 7, 22, tzinfo=UTC),
+    )
+
+    await service.teacher_cancel_batch_class_session(
+        class_session.id,
+        BookingActionRequest(actor_user_id=teacher_user_id, reason="Unable to teach"),
+    )
+
+    assert class_session.status == ClassSessionStatus.CANCELLED
+    assert selected_booking.status == BookingStatus.CANCELLED
+    assert other_option_booking.status == BookingStatus.BOOKED
+    assert len(session.added) == 1
+    event = session.added[0]
+    assert event.event_type == BookingEventType.CANCELLED_BY_TEACHER
+    assert event.actor_user_id == teacher_user_id
+    assert event.reason == "Unable to teach"

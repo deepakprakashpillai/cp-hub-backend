@@ -27,9 +27,7 @@ async def paginate_scalars[T](
     pagination: PaginationParams,
 ) -> Page[T]:
     total = await count_statement_rows(session, statement)
-    result = await session.scalars(
-        statement.offset(pagination.offset).limit(pagination.page_size)
-    )
+    result = await session.scalars(statement.offset(pagination.offset).limit(pagination.page_size))
     return Page(
         items=list(result),
         total=total,
@@ -44,9 +42,7 @@ async def paginate_rows(
     pagination: PaginationParams,
 ) -> tuple[list[Any], int]:
     total = await count_statement_rows(session, statement)
-    result = await session.execute(
-        statement.offset(pagination.offset).limit(pagination.page_size)
-    )
+    result = await session.execute(statement.offset(pagination.offset).limit(pagination.page_size))
     return list(result.all()), total
 
 

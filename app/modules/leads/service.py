@@ -15,8 +15,6 @@ from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.core.pagination import Page, PaginationParams, paginate_scalars
 from app.modules.leads.models import Lead
 from app.modules.leads.schemas import (
-    LeadConversionRead,
-    LeadConvert,
     LeadCreate,
     LeadImportIssue,
     LeadImportPreview,
@@ -24,12 +22,7 @@ from app.modules.leads.schemas import (
     LeadSummary,
     LeadUpdate,
 )
-from app.modules.students.schemas import StudentCreate
-from app.modules.students.service import StudentService
-from app.modules.users.schemas import UserCreate
-from app.modules.users.service import UserService
-from app.shared.enums import LeadStatus, StudentStatus, UserRole
-from app.shared.utils import utc_now
+from app.shared.enums import LeadStatus
 
 
 class LeadService:
@@ -109,39 +102,6 @@ class LeadService:
         lead = await self.get_lead(lead_id)
         await self.session.delete(lead)
         await self.session.commit()
-
-    async def convert_lead(self, lead_id: UUID, conversion: LeadConvert) -> LeadConversionRead:
-        lead = await self.get_lead(lead_id)
-        if lead.status != LeadStatus.ENROLLED:
-            raise ConflictError("Only enrolled leads can be converted")
-        if lead.converted_student_id is not None:
-            raise ConflictError("Lead has already been converted")
-
-        email = str(conversion.email).strip().lower()
-        await self._ensure_not_duplicate(email, lead.phone, exclude_id=lead.id)
-        user = await UserService(self.session).create_user(
-            UserCreate(
-                full_name=lead.full_name,
-                email=email,
-                phone=lead.phone,
-                role=UserRole.STUDENT,
-            ),
-            commit=False,
-        )
-        student = await StudentService(self.session).create_student(
-            StudentCreate(
-                user_id=user.id,
-                program_type=conversion.program_type,
-                status=StudentStatus.ENROLLED,
-            ),
-            commit=False,
-        )
-        lead.email = email
-        lead.converted_student_id = student.id
-        lead.converted_at = utc_now()
-        await self.session.commit()
-        await self.session.refresh(lead)
-        return LeadConversionRead(lead=lead, student_id=student.id)
 
     async def get_lead(self, lead_id: UUID) -> Lead:
         lead = await self.session.get(Lead, lead_id)

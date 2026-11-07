@@ -82,13 +82,9 @@ def test_admin_schedule_and_program_query_contract_is_exposed_in_openapi() -> No
     assert "post" in paths["/api/v1/admin/bookings/one-on-one"]
     assert "post" in paths["/api/v1/admin/batch-groups"]
     assert "post" in paths["/api/v1/admin/batch-groups/{batch_group_id}/students"]
-    assert "delete" in paths[
-        "/api/v1/admin/batch-groups/{batch_group_id}/students/{student_id}"
-    ]
+    assert "delete" in paths["/api/v1/admin/batch-groups/{batch_group_id}/students/{student_id}"]
     assert "post" in paths["/api/v1/admin/packages"]
-    assert "post" in paths[
-        "/api/v1/admin/classes/{class_session_id}/reschedule/one-on-one"
-    ]
+    assert "post" in paths["/api/v1/admin/classes/{class_session_id}/reschedule/one-on-one"]
     assert "post" in paths["/api/v1/admin/classes/{class_session_id}/reschedule/batch"]
 
 
@@ -110,9 +106,7 @@ def test_batch_schedule_day_contract_is_exposed_in_openapi() -> None:
         "/api/v1/admin/batch-schedule-days/{day_id}/students/{student_id}"
     ].keys()
     assert "get" in paths["/api/v1/students/{student_id}/batch-schedule-days"]
-    assert "put" in paths[
-        "/api/v1/students/{student_id}/batch-schedule-days/{day_id}/selection"
-    ]
+    assert "put" in paths["/api/v1/students/{student_id}/batch-schedule-days/{day_id}/selection"]
 
     create_schema = schema["components"]["schemas"]["BatchDayCreate"]
     assert create_schema["properties"]["schedule_date"]["format"] == "date"
@@ -131,9 +125,5 @@ def test_batch_group_package_contract_is_exposed_in_openapi() -> None:
     assert "package_id" in schemas["BatchGroupRead"]["properties"]
     assert "package" in schemas["BatchGroupRead"]["properties"]
     assert "package" in schemas["AdminBatchGroupRead"]["properties"]
-    assert "allow_package_access_override" in schemas[
-        "StudentBatchMembershipAssign"
-    ]["properties"]
-    assert "allow_package_access_override" in schemas[
-        "AdminStudentBatchGroupSet"
-    ]["properties"]
+    assert "allow_package_access_override" in schemas["StudentBatchMembershipAssign"]["properties"]
+    assert "allow_package_access_override" in schemas["AdminStudentBatchGroupSet"]["properties"]

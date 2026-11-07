@@ -6,7 +6,7 @@ import pytest
 
 from app.core.exceptions import NotFoundError
 from app.modules.batch_groups.models import BatchGroup, StudentBatchMembership
-from app.modules.batch_groups.service import BatchGroupService
+from app.modules.batch_groups.service import _BatchGroupOperations as BatchGroupService
 from app.modules.bookings.models import Booking, BookingEvent
 from app.modules.students.models import Student
 from app.shared.enums import BookingEventType, BookingStatus, StudentProgramType, StudentStatus

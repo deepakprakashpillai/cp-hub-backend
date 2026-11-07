@@ -7,7 +7,7 @@ from fastapi import APIRouter, Query, status
 from app.api.deps import DBSession, Pagination
 from app.core.pagination import Page
 from app.modules.bookings.schemas import AdminAddStudentToClass, BookingRead, ClassAttendanceMark
-from app.modules.bookings.service import BookingService
+from app.modules.bookings.service import BookingAttendanceService
 from app.modules.classes.schemas import BatchClassSessionCreate, ClassSessionRead
 from app.modules.classes.service import ClassSessionService
 from app.shared.enums import StudentProgramType
@@ -55,7 +55,9 @@ async def mark_class_attendance(
     attendance_in: ClassAttendanceMark,
     session: DBSession,
 ) -> list[BookingRead]:
-    return await BookingService(session).mark_class_attendance(class_session_id, attendance_in)
+    return await BookingAttendanceService(session).mark_class_attendance(
+        class_session_id, attendance_in
+    )
 
 
 @router.post("/{class_session_id}/admin-add-student", response_model=BookingRead)
@@ -64,7 +66,9 @@ async def admin_add_student_to_class(
     add_in: AdminAddStudentToClass,
     session: DBSession,
 ) -> BookingRead:
-    return await BookingService(session).admin_add_student_to_class(class_session_id, add_in)
+    return await BookingAttendanceService(session).admin_add_student_to_class(
+        class_session_id, add_in
+    )
 
 
 @router.get("/{class_session_id}", response_model=ClassSessionRead)

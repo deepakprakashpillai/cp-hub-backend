@@ -14,7 +14,11 @@ from app.modules.batch_groups.schemas import (
     StudentBatchMembershipAssign,
     StudentBatchMembershipRead,
 )
-from app.modules.batch_groups.service import BatchGroupService
+from app.modules.batch_groups.service import (
+    BatchGroupLifecycleService,
+    BatchMembershipService,
+    BatchSessionGenerationService,
+)
 
 router = APIRouter()
 IsActiveQuery = Annotated[bool | None, Query()]
@@ -26,7 +30,7 @@ async def list_batch_groups(
     pagination: Pagination,
     is_active: IsActiveQuery = None,
 ) -> Page[BatchGroupRead]:
-    return await BatchGroupService(session).list_batch_groups(
+    return await BatchGroupLifecycleService(session).list_batch_groups(
         pagination,
         is_active=is_active,
     )
@@ -37,7 +41,7 @@ async def create_batch_group(
     batch_group_in: BatchGroupCreate,
     session: DBSession,
 ) -> BatchGroupRead:
-    return await BatchGroupService(session).create_batch_group(batch_group_in)
+    return await BatchGroupLifecycleService(session).create_batch_group(batch_group_in)
 
 
 @router.get("/{batch_group_id}", response_model=BatchGroupRead)
@@ -45,7 +49,7 @@ async def get_batch_group(
     batch_group_id: UUID,
     session: DBSession,
 ) -> BatchGroupRead:
-    return await BatchGroupService(session).get_batch_group(batch_group_id)
+    return await BatchGroupLifecycleService(session).get_batch_group(batch_group_id)
 
 
 @router.patch("/{batch_group_id}", response_model=BatchGroupRead)
@@ -54,7 +58,9 @@ async def update_batch_group(
     batch_group_in: BatchGroupUpdate,
     session: DBSession,
 ) -> BatchGroupRead:
-    return await BatchGroupService(session).update_batch_group(batch_group_id, batch_group_in)
+    return await BatchGroupLifecycleService(session).update_batch_group(
+        batch_group_id, batch_group_in
+    )
 
 
 @router.post("/{batch_group_id}/void", response_model=BatchGroupRead)
@@ -62,7 +68,7 @@ async def void_batch_group(
     batch_group_id: UUID,
     session: DBSession,
 ) -> BatchGroupRead:
-    return await BatchGroupService(session).void_batch_group(batch_group_id)
+    return await BatchGroupLifecycleService(session).void_batch_group(batch_group_id)
 
 
 @router.get("/{batch_group_id}/students", response_model=Page[StudentBatchMembershipRead])
@@ -72,7 +78,7 @@ async def list_batch_group_students(
     pagination: Pagination,
     is_active: IsActiveQuery = True,
 ) -> Page[StudentBatchMembershipRead]:
-    return await BatchGroupService(session).list_batch_group_students(
+    return await BatchMembershipService(session).list_batch_group_students(
         batch_group_id=batch_group_id,
         pagination=pagination,
         is_active=is_active,
@@ -89,7 +95,7 @@ async def assign_student_to_batch_group(
     membership_in: StudentBatchMembershipAssign,
     session: DBSession,
 ) -> StudentBatchMembershipRead:
-    return await BatchGroupService(session).assign_student_to_batch_group(
+    return await BatchMembershipService(session).assign_student_to_batch_group(
         batch_group_id,
         membership_in,
     )
@@ -101,7 +107,7 @@ async def generate_batch_sessions(
     generation_in: BatchSessionBulkGenerate,
     session: DBSession,
 ) -> BatchSessionBulkGenerateResult:
-    class_sessions = await BatchGroupService(session).generate_batch_sessions(
+    class_sessions = await BatchSessionGenerationService(session).generate_batch_sessions(
         batch_group_id,
         generation_in,
     )

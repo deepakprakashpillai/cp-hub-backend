@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.core.pagination import Page, PaginationParams, paginate_scalars
+from app.modules.notifications.service import NotificationService
 from app.modules.users.models import User
 from app.modules.users.schemas import UserCreate, UserUpdate
 
@@ -42,6 +43,8 @@ class UserService:
 
     async def update_user(self, user_id: UUID, user_in: UserUpdate) -> User:
         user = await self.get_user(user_id)
+        previous_email = user.email
+        previous_is_active = user.is_active
         update_data = user_in.model_dump(exclude_unset=True)
 
         for non_nullable_field in ("full_name", "email", "is_active"):
@@ -56,6 +59,48 @@ class UserService:
 
         for field, value in update_data.items():
             setattr(user, field, value)
+
+        service = NotificationService(self.session)
+        if "email" in update_data and previous_email != user.email:
+            await service.emit_to_users(
+                event_type="account.email_changed",
+                aggregate_type="user",
+                aggregate_id=user.id,
+                dedupe_key=f"notification:email-changed:{user.id}:{user.email}",
+                recipient_user_ids=[user.id],
+                title="Login email changed",
+                body="The email address used to sign in to CP Hub was updated.",
+                category="account",
+                priority="high",
+                action_url=None,
+                data={
+                    "user_id": str(user.id),
+                    "previous_email": previous_email,
+                    "current_email": user.email,
+                },
+                include_admins=True,
+            )
+        if "is_active" in update_data and previous_is_active != user.is_active:
+            await service.emit_to_users(
+                event_type="account.status_changed",
+                aggregate_type="user",
+                aggregate_id=user.id,
+                dedupe_key=f"notification:account-status:{user.id}:{user.is_active}",
+                recipient_user_ids=[user.id],
+                title="Account status updated",
+                body="Your CP Hub account was enabled."
+                if user.is_active
+                else "Your CP Hub account was disabled.",
+                category="account",
+                priority="medium" if user.is_active else "high",
+                action_url=None,
+                data={
+                    "user_id": str(user.id),
+                    "previous_status": "active" if previous_is_active else "inactive",
+                    "current_status": "active" if user.is_active else "inactive",
+                },
+                include_admins=True,
+            )
 
         await self.session.commit()
         await self.session.refresh(user)

@@ -13,7 +13,7 @@ from app.modules.batch_groups.schemas import (
     BatchGroupRead,
     StudentBatchMembershipAssign,
 )
-from app.modules.batch_groups.service import BatchGroupService
+from app.modules.batch_groups.service import _BatchGroupOperations as BatchGroupService
 from app.modules.packages.models import Package
 from app.modules.packages.service import PackageService
 

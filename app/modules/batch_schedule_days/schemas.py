@@ -41,6 +41,7 @@ class BatchScheduleDefaultsUpdate(BaseModel):
     )
     model_config = ConfigDict(extra="forbid")
 
+
 class BatchScheduleDefaultsRead(BaseModel):
     id: UUID
     timezone: str

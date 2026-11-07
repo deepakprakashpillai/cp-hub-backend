@@ -25,10 +25,7 @@ def test_batch_day_accepts_configurable_option_counts(option_count: int) -> None
     day = BatchDayCreate(
         batch_group_id=uuid4(),
         schedule_date=date(2026, 8, 2),
-        options=[
-            _option(f"Option {index}", 6 + (index * 2))
-            for index in range(option_count)
-        ],
+        options=[_option(f"Option {index}", 6 + (index * 2)) for index in range(option_count)],
     )
 
     assert len(day.options) == option_count

@@ -8,7 +8,7 @@ from app.core.exceptions import ConflictError
 from app.modules.batch_groups.models import StudentBatchMembership
 from app.modules.batch_schedule_days.models import BatchScheduleDay
 from app.modules.bookings.models import Booking, BookingEvent
-from app.modules.bookings.service import BookingService
+from app.modules.bookings.service import _BookingOperations as BookingService
 from app.modules.classes.models import ClassSession
 from app.modules.students.models import Student
 from app.shared.enums import (
@@ -79,7 +79,7 @@ async def test_student_selects_one_batch_day_option_with_audited_source(
         day=day,
     )
     service = BookingService(session)
-    monkeypatch.setattr("app.modules.bookings.service.utc_now", lambda: now)
+    monkeypatch.setattr("app.modules.bookings.creation_service.utc_now", lambda: now)
     monkeypatch.setattr(
         service,
         "_get_class_session_for_update",
@@ -122,7 +122,7 @@ async def test_student_cannot_select_second_option_for_batch_day(
         day=day,
     )
     service = BookingService(session)
-    monkeypatch.setattr("app.modules.bookings.service.utc_now", lambda: now)
+    monkeypatch.setattr("app.modules.bookings.creation_service.utc_now", lambda: now)
     monkeypatch.setattr(
         service,
         "_get_class_session_for_update",
@@ -160,7 +160,7 @@ async def test_admin_move_cancels_old_booking_and_creates_new_one_atomically(
         day=day,
     )
     service = BookingService(session)
-    monkeypatch.setattr("app.modules.bookings.service.utc_now", lambda: now)
+    monkeypatch.setattr("app.modules.bookings.creation_service.utc_now", lambda: now)
     monkeypatch.setattr(
         service,
         "_get_class_session_for_update",

@@ -3,7 +3,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.shared.enums import BookingEventType, BookingStatus
+from app.modules.classes.schemas import normalize_utc_datetime
+from app.shared.enums import BatchSlot, BookingEventType, BookingStatus
 
 
 class OneOnOneBookingCreate(BaseModel):
@@ -43,6 +44,24 @@ class OneOnOneBookingReschedule(BookingActionRequest):
 
 class BatchBookingReschedule(BookingActionRequest):
     class_session_id: UUID
+
+
+class AdminBatchClassReschedule(BaseModel):
+    starts_at: datetime
+    ends_at: datetime
+    teacher_id: UUID | None = None
+    batch_slot: BatchSlot | None = None
+    capacity: int | None = Field(default=None, gt=0)
+    actor_user_id: UUID | None = None
+    reason: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_datetime_range(self) -> "AdminBatchClassReschedule":
+        self.starts_at = normalize_utc_datetime(self.starts_at)
+        self.ends_at = normalize_utc_datetime(self.ends_at)
+        if self.starts_at >= self.ends_at:
+            raise ValueError("starts_at must be before ends_at")
+        return self
 
 
 class BookingAttendanceMark(BookingActionRequest):

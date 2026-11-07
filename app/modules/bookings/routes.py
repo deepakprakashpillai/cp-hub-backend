@@ -14,7 +14,13 @@ from app.modules.bookings.schemas import (
     OneOnOneBookingCreate,
     OneOnOneBookingReschedule,
 )
-from app.modules.bookings.service import BookingService
+from app.modules.bookings.service import (
+    BookingAttendanceService,
+    BookingCancellationService,
+    BookingCreationService,
+    BookingQueryService,
+    BookingRescheduleService,
+)
 
 router = APIRouter()
 
@@ -26,7 +32,7 @@ async def list_bookings(
     student_id: UUID | None = None,
     class_session_id: UUID | None = None,
 ) -> Page[BookingRead]:
-    return await BookingService(session).list_bookings(
+    return await BookingQueryService(session).list_bookings(
         pagination,
         student_id=student_id,
         class_session_id=class_session_id,
@@ -42,7 +48,7 @@ async def create_one_on_one_booking(
     booking_in: OneOnOneBookingCreate,
     session: DBSession,
 ) -> BookingRead:
-    return await BookingService(session).create_one_on_one_booking(booking_in)
+    return await BookingCreationService(session).create_one_on_one_booking(booking_in)
 
 
 @router.post("/batch", response_model=BookingRead, status_code=status.HTTP_201_CREATED)
@@ -50,7 +56,7 @@ async def create_batch_booking(
     booking_in: BatchBookingCreate,
     session: DBSession,
 ) -> BookingRead:
-    return await BookingService(session).create_batch_booking(booking_in)
+    return await BookingCreationService(session).create_batch_booking(booking_in)
 
 
 @router.post("/{booking_id}/cancel", response_model=BookingRead)
@@ -59,7 +65,7 @@ async def cancel_booking(
     cancel_in: BookingActionRequest,
     session: DBSession,
 ) -> BookingRead:
-    return await BookingService(session).cancel_booking(booking_id, cancel_in)
+    return await BookingCancellationService(session).cancel_booking(booking_id, cancel_in)
 
 
 @router.post("/{booking_id}/admin-cancel", response_model=BookingRead)
@@ -68,7 +74,7 @@ async def admin_cancel_booking(
     cancel_in: BookingActionRequest,
     session: DBSession,
 ) -> BookingRead:
-    return await BookingService(session).admin_cancel_booking(booking_id, cancel_in)
+    return await BookingCancellationService(session).admin_cancel_booking(booking_id, cancel_in)
 
 
 @router.post("/{booking_id}/reschedule/one-on-one", response_model=BookingRead)
@@ -77,7 +83,7 @@ async def reschedule_one_on_one_booking(
     reschedule_in: OneOnOneBookingReschedule,
     session: DBSession,
 ) -> BookingRead:
-    return await BookingService(session).reschedule_one_on_one_booking(
+    return await BookingRescheduleService(session).reschedule_one_on_one_booking(
         booking_id,
         reschedule_in,
     )
@@ -89,7 +95,7 @@ async def admin_reschedule_one_on_one_booking(
     reschedule_in: OneOnOneBookingReschedule,
     session: DBSession,
 ) -> BookingRead:
-    return await BookingService(session).admin_reschedule_one_on_one_booking(
+    return await BookingRescheduleService(session).admin_reschedule_one_on_one_booking(
         booking_id,
         reschedule_in,
     )
@@ -101,7 +107,7 @@ async def reschedule_batch_booking(
     reschedule_in: BatchBookingReschedule,
     session: DBSession,
 ) -> BookingRead:
-    return await BookingService(session).reschedule_batch_booking(
+    return await BookingRescheduleService(session).reschedule_batch_booking(
         booking_id,
         reschedule_in,
     )
@@ -113,7 +119,7 @@ async def admin_reschedule_batch_booking(
     reschedule_in: BatchBookingReschedule,
     session: DBSession,
 ) -> BookingRead:
-    return await BookingService(session).admin_reschedule_batch_booking(
+    return await BookingRescheduleService(session).admin_reschedule_batch_booking(
         booking_id,
         reschedule_in,
     )
@@ -125,7 +131,7 @@ async def list_booking_events(
     session: DBSession,
     pagination: Pagination,
 ) -> Page[BookingEventRead]:
-    return await BookingService(session).list_booking_events(booking_id, pagination)
+    return await BookingQueryService(session).list_booking_events(booking_id, pagination)
 
 
 @router.post("/{booking_id}/attendance", response_model=BookingRead)
@@ -134,7 +140,9 @@ async def mark_booking_attendance(
     attendance_in: BookingAttendanceMark,
     session: DBSession,
 ) -> BookingRead:
-    return await BookingService(session).mark_booking_attendance(booking_id, attendance_in)
+    return await BookingAttendanceService(session).mark_booking_attendance(
+        booking_id, attendance_in
+    )
 
 
 @router.get("/{booking_id}", response_model=BookingRead)
@@ -142,4 +150,4 @@ async def get_booking(
     booking_id: UUID,
     session: DBSession,
 ) -> BookingRead:
-    return await BookingService(session).get_booking(booking_id)
+    return await BookingQueryService(session).get_booking(booking_id)

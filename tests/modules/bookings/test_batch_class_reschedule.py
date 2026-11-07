@@ -7,7 +7,7 @@ import pytest
 from app.core.exceptions import ConflictError
 from app.modules.admin.schemas import AdminBatchClassReschedule
 from app.modules.bookings.models import Booking, BookingEvent
-from app.modules.bookings.service import BookingService
+from app.modules.bookings.service import _BookingOperations as BookingService
 from app.modules.classes.models import ClassSession
 from app.shared.enums import (
     BatchSlot,
@@ -70,10 +70,10 @@ async def test_batch_class_reschedule_preserves_bookings_and_logs_timing_events(
     ]
     session = RescheduleSession(
         bookings=bookings,
-        scalar_results=[None, None, None],
+        scalar_results=[None] * 12,
     )
     service = BookingService(session)
-    monkeypatch.setattr("app.modules.bookings.service.utc_now", lambda: now)
+    monkeypatch.setattr("app.modules.bookings.reschedule_service.utc_now", lambda: now)
     monkeypatch.setattr(service, "_get_optional_user", AsyncMock(return_value=None))
     monkeypatch.setattr(
         service,
@@ -107,9 +107,7 @@ async def test_batch_class_reschedule_preserves_bookings_and_logs_timing_events(
         BookingEventType.RESCHEDULED_FROM,
         BookingEventType.RESCHEDULED_TO,
     ]
-    assert events[0].event_metadata["old"]["starts_at"] == (
-        now + timedelta(days=2)
-    ).isoformat()
+    assert events[0].event_metadata["old"]["starts_at"] == (now + timedelta(days=2)).isoformat()
     assert events[0].event_metadata["new"]["starts_at"] == new_start.isoformat()
     session.commit.assert_awaited_once()
 
@@ -138,7 +136,7 @@ async def test_batch_class_reschedule_capacity_conflict_does_not_commit(
     ]
     session = RescheduleSession(bookings=bookings, scalar_results=[None])
     service = BookingService(session)
-    monkeypatch.setattr("app.modules.bookings.service.utc_now", lambda: now)
+    monkeypatch.setattr("app.modules.bookings.reschedule_service.utc_now", lambda: now)
     monkeypatch.setattr(service, "_get_optional_user", AsyncMock(return_value=None))
     monkeypatch.setattr(
         service,
@@ -168,7 +166,7 @@ async def test_batch_class_reschedule_rejects_teacher_overlap_without_commit(
     session = RescheduleSession(bookings=[], scalar_results=[uuid4()])
     session.get.return_value = object()
     service = BookingService(session)
-    monkeypatch.setattr("app.modules.bookings.service.utc_now", lambda: now)
+    monkeypatch.setattr("app.modules.bookings.reschedule_service.utc_now", lambda: now)
     monkeypatch.setattr(service, "_get_optional_user", AsyncMock(return_value=None))
     monkeypatch.setattr(
         service,
@@ -205,7 +203,7 @@ async def test_batch_class_reschedule_rejects_student_daily_conflict_without_com
         scalar_results=[None, uuid4()],
     )
     service = BookingService(session)
-    monkeypatch.setattr("app.modules.bookings.service.utc_now", lambda: now)
+    monkeypatch.setattr("app.modules.bookings.reschedule_service.utc_now", lambda: now)
     monkeypatch.setattr(service, "_get_optional_user", AsyncMock(return_value=None))
     monkeypatch.setattr(
         service,

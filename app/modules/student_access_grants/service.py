@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import BadRequestError, NotFoundError
 from app.core.pagination import Page, PaginationParams, paginate_scalars
+from app.modules.notifications.service import NotificationService
 from app.modules.packages.models import Package
 from app.modules.student_access_grants.models import StudentAccessGrant
 from app.modules.student_access_grants.schemas import StudentAccessGrantCreate
@@ -72,6 +73,29 @@ class StudentAccessGrantService:
         student.access_ends_at = access_ends_at
 
         self.session.add(grant)
+        await self.session.flush()
+        await NotificationService(self.session).emit_to_users(
+            event_type="access.granted",
+            aggregate_type="student_access_grant",
+            aggregate_id=grant.id,
+            dedupe_key=f"notification:access-granted:{grant.id}",
+            recipient_user_ids=[student.user_id],
+            title="Course access updated",
+            body="Your course access has been granted or extended.",
+            category="access",
+            priority="medium",
+            action_url="/student",
+            data={
+                "student_id": str(student.id),
+                "grant_id": str(grant.id),
+                "access_starts_at": access_starts_at.isoformat(),
+                "access_ends_at": access_ends_at.isoformat(),
+                "duration_days": duration_days,
+                "package_name": package.name if package else None,
+            },
+            actor_user_id=grant_in.created_by_user_id,
+            include_admins=True,
+        )
         await self.session.commit()
         await self.session.refresh(grant)
         return grant

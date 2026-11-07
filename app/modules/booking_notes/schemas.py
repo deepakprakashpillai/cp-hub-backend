@@ -7,7 +7,9 @@ from app.shared.enums import BookingNoteVisibility
 
 
 class BookingNoteCreate(BaseModel):
-    teacher_id: UUID
+    # The authenticated teacher is injected by the route.  The optional field keeps
+    # the schema backward-compatible for internal/admin callers.
+    teacher_id: UUID | None = None
     note: str = Field(min_length=1, max_length=2000)
     visibility: BookingNoteVisibility = BookingNoteVisibility.ADMIN_ONLY
 

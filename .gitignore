@@ -12,12 +12,13 @@ tmp/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.hypothesis/
 .coverage
+.coverage.*
 htmlcov/
 dist/
 build/
 *.egg-info/
 alembic/versions/*.pyc
 postgres_data/
-docs/
 graphify-out/
