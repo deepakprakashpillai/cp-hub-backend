@@ -215,3 +215,9 @@ Frontend clients should render those fields directly and localise the ISO timest
 ## Next Recommended Domain
 
 Complete browser-level role-portal QA against the frontend cutover.
+
+## VPS deployment
+
+A push to `main` starts the GitHub Actions deployment. The workflow checks
+the pushed commit before releasing it to the VPS. The same workflow can be
+started manually on `main` from the Actions page.
