@@ -29,7 +29,12 @@ class TeacherService:
         return teacher
 
     async def create_teacher(self, teacher_in: TeacherCreate, *, commit: bool = True) -> Teacher:
-        user = await self.session.get(User, teacher_in.user_id)
+        user = await self.session.scalar(
+            select(User)
+            .where(User.id == teacher_in.user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if user is None:
             raise NotFoundError("User not found")
 

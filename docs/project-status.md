@@ -89,6 +89,8 @@ Last updated: 2026-07-29
   HttpOnly rotating refresh cookies, password setup/reset tokens, `/auth/login`, `/auth/refresh`,
   `/auth/logout`, and `/auth/me`.
 - Admin teacher creation issues a single-use password setup invitation; Resend delivery is enabled by configuration and local development logs the link instead.
+- Admin-only exact user email lookup and atomic existing-admin-to-teacher profile linking, including
+  self-linking, safe retries, and preservation of existing profile data.
 - Authenticated self-service teacher and student portal APIs. Teacher routes are scoped to the
   authenticated teacher's profile, assigned classes, roster, attendance, availability, students,
   and booking notes. Student routes are scoped to the authenticated student's profile, grants,

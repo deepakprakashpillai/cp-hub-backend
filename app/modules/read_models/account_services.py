@@ -5,7 +5,7 @@ from sqlalchemy import exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.core.exceptions import BadRequestError
+from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.core.pagination import Page, PaginationParams, paginate_rows
 from app.modules.auth.email import send_password_setup_email
 from app.modules.auth.service import AuthService
@@ -17,8 +17,11 @@ from app.modules.read_models.admin_schemas import (
     AdminStudentSortBy,
     AdminStudentUpdate,
     AdminTeacherCreate,
+    AdminTeacherLinkRead,
+    AdminTeacherLinkRequest,
     AdminTeacherRead,
     AdminTeacherSortBy,
+    AdminUserLookupRead,
 )
 from app.modules.students.models import Student
 from app.modules.students.schemas import StudentCreate, StudentProgramSwitch, StudentUpdate
@@ -46,6 +49,50 @@ class _ServiceBase:
 
 
 class AdminAccountWorkflow(_ServiceBase):
+    async def lookup_user(self, email: str) -> AdminUserLookupRead:
+        row = (
+            await self.session.execute(
+                select(User, Teacher.id)
+                .outerjoin(Teacher, Teacher.user_id == User.id)
+                .where(User.email == email)
+            )
+        ).one_or_none()
+        if row is None:
+            raise NotFoundError("User not found")
+        return AdminUserLookupRead(user=row[0], teacher_id=row[1])
+
+    async def link_existing_admin(self, body: AdminTeacherLinkRequest) -> AdminTeacherLinkRead:
+        try:
+            user = await self.session.scalar(
+                select(User)
+                .where(User.id == body.user_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if user is None:
+                raise NotFoundError("User not found")
+            if UserRole.ADMIN not in user.roles:
+                raise ConflictError("Target account must have the admin role")
+            if UserRole.TEACHER not in user.roles:
+                user.additional_role = UserRole.TEACHER
+            teacher = await self.session.scalar(select(Teacher).where(Teacher.user_id == user.id))
+            existed = teacher is not None
+            if teacher is None:
+                teacher = Teacher(**body.model_dump())
+                self.session.add(teacher)
+                await self.session.flush()
+            await self.session.flush()
+            await self.session.refresh(user)
+            await self.session.refresh(teacher)
+            result = AdminTeacherLinkRead(
+                user=user, teacher=teacher, profile_already_existed=existed
+            )
+            await self.session.commit()
+            return result
+        except Exception:
+            await self.session.rollback()
+            raise
+
     async def create_teacher(self, teacher_in: AdminTeacherCreate) -> tuple[User, Teacher]:
         user = await UserService(self.session).create_user(
             UserCreate(

@@ -33,7 +33,12 @@ class UserService:
         allowed = {UserRole.ADMIN, UserRole.TEACHER}
         if len(requested) != len(roles) or not requested or not requested <= allowed:
             raise BadRequestError("Roles must be distinct admin and/or teacher roles")
-        user = await self.session.scalar(select(User).where(User.id == user_id).with_for_update())
+        user = await self.session.scalar(
+            select(User)
+            .where(User.id == user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if user is None:
             raise NotFoundError("User not found")
         if user.role not in allowed:

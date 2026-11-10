@@ -29,7 +29,7 @@ Fields:
 Rules:
 
 - A teacher profile must link to an existing user.
-- The linked user must have `role = teacher`.
+- The linked user must have the teacher role among its assigned roles.
 - One user can have only one teacher profile.
 - `teachers.is_active` means the teacher profile can be enabled/paused separately from the user account.
 - Deactivating a teacher clears permanent one-on-one student assignments to that teacher.
@@ -132,6 +132,8 @@ Endpoints:
 Admin orchestration endpoint:
 
 - `POST /api/v1/admin/teachers` creates the teacher user and linked teacher profile atomically.
+- `POST /api/v1/admin/teachers/link-existing` links an existing admin account atomically, as
+  described below.
 - `GET /api/v1/admin/teachers` and `GET /api/v1/admin/teachers/{teacher_id}` return teacher
   profile data nested with the linked user data.
 - `PATCH /api/v1/admin/teachers/{teacher_id}` updates teacher profile fields and returns teacher
@@ -144,6 +146,35 @@ Admin orchestration endpoint:
 - Admin teacher sorting supports `created_at`, linked-user `name`, teacher `display_name`, and
   teacher-profile `is_active`, with `asc` or `desc` direction.
 - Admin teacher sorting defaults to `created_at desc` and uses teacher ID as a stable tiebreaker.
+
+### Link an existing admin as a teacher
+
+An authenticated admin can call `POST /api/v1/admin/teachers/link-existing` with:
+
+```json
+{
+  "user_id": "existing-admin-user-uuid",
+  "display_name": "Teacher display name",
+  "bio": null,
+  "profile_photo_url": null,
+  "is_active": true
+}
+```
+
+`user_id` and `display_name` are required; the remaining fields are optional, and `is_active`
+defaults to true. A 200 response contains `{ "user": UserRead, "teacher": TeacherRead,
+"profile_already_existed": boolean }`. The caller may select their own account. The target must
+already have the admin role; disabled accounts are allowed and remain disabled. If a profile
+exists, it is returned unchanged (including its active state), and the submitted profile fields
+are ignored. The teacher role is assigned in either case. No password invitation is sent, and the
+existing credentials, admin role and account status are preserved.
+
+Missing targets return 404, targets without the admin role return 409, malformed input returns
+422, unauthenticated callers return 401, and non-admin callers return 403. A row lock serializes
+role changes and profile creation, including concurrent retries and the legacy teacher creation
+path; the existing unique profile constraint remains a safeguard. Both role assignment and profile
+creation commit together or roll back together. No new database migration is required. See
+[Users](users.md) for the exact email lookup used to choose the account.
 
 Admin teacher profile update fields:
 

@@ -115,15 +115,13 @@ async def test_role_updates_reject_invalid_or_self_admin_removal():
 async def test_teacher_profile_can_link_to_existing_admin_teacher():
     user = account(additional_role=UserRole.TEACHER)
     session = AsyncMock()
-    session.get.return_value = user
-    session.scalar.return_value = None
+    session.scalar.side_effect = [user, None, user, Teacher(user_id=user.id)]
     session.add = Mock()
     teacher = await TeacherService(session).create_teacher(
         TeacherCreate(user_id=user.id, display_name="Person")
     )
     assert teacher.user_id == user.id
     session.add.assert_called_once_with(teacher)
-    session.scalar.return_value = teacher
     with pytest.raises(ConflictError):
         await TeacherService(session).create_teacher(
             TeacherCreate(user_id=user.id, display_name="Person")

@@ -70,11 +70,17 @@ this endpoint. A role change preserves the password, tokens, user ID, and profil
 access retains the profile and its data but blocks teacher APIs; granting it again restores access
 only if that profile is active.
 
-To link an existing admin, first grant the teacher role, then call admin-only `POST /api/v1/teachers`
-with `user_id`, `display_name`, and optional profile fields. The unique user/profile link prevents
-duplicates. If a profile already exists, reuse it; do not create another. To grant admin access to
-an existing teacher, use the role endpoint. Neither operation sends a password setup invitation or
+Use the atomic existing-admin onboarding operation documented in [Teacher](teacher.md) to grant
+teacher access and link a profile, including for the signed-in admin. To grant admin access to an
+existing teacher, use the role endpoint. Neither operation sends a password setup invitation or
 changes the existing password. The `POST /api/v1/admin/teachers` workflow remains for new accounts.
+
+`GET /api/v1/admin/users/lookup?email=...` is admin-only and returns
+`{"user": UserRead, "teacher_id": UUID | null}` for the exact validated email, or 404 when absent.
+`UserRead` includes ID, name, email, roles and account `is_active`. The same `EmailStr` validation
+as account creation normalizes the domain and surrounding whitespace; matching uses the exact
+stored value, including the case of the local part, consistent with the current database unique
+email constraint. Invalid emails return 422. This lookup is not a public account-discovery API.
 
 Base path:
 

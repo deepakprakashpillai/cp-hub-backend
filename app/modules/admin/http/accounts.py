@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Response, status
+from pydantic import EmailStr
 
 from app.api.deps import DBSession, Pagination
 from app.core.pagination import Page
@@ -27,8 +28,11 @@ from app.modules.admin.schemas import (
     AdminStudentSortBy,
     AdminStudentUpdate,
     AdminTeacherCreate,
+    AdminTeacherLinkRead,
+    AdminTeacherLinkRequest,
     AdminTeacherRead,
     AdminTeacherSortBy,
+    AdminUserLookupRead,
     SortOrder,
 )
 from app.modules.auth.dependencies import CurrentUser
@@ -46,6 +50,18 @@ from app.modules.users.schemas import UserRead, UserRolesUpdate, UserUpdate
 from app.modules.users.service import UserService
 
 router = APIRouter()
+
+
+@router.get("/users/lookup", response_model=AdminUserLookupRead)
+async def lookup_user(email: EmailStr, session: DBSession) -> AdminUserLookupRead:
+    return await AdminAccountWorkflow(session).lookup_user(str(email))
+
+
+@router.post("/teachers/link-existing", response_model=AdminTeacherLinkRead)
+async def link_existing_admin(
+    body: AdminTeacherLinkRequest, session: DBSession
+) -> AdminTeacherLinkRead:
+    return await AdminAccountWorkflow(session).link_existing_admin(body)
 
 
 @router.put("/users/{user_id}/roles", response_model=UserRead)

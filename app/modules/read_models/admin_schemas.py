@@ -47,6 +47,8 @@ from app.modules.student_payments.schemas import (
     normalize_utc_datetime as normalize_paid_at,
 )
 from app.modules.students.schemas import StudentUpdate, normalize_utc_datetime
+from app.modules.teachers.schemas import TeacherRead
+from app.modules.users.schemas import UserRead
 from app.shared.enums import (
     PaymentMethod,
     StudentAccessGrantType,
@@ -114,6 +116,25 @@ class AdminTeacherCreate(AdminUserCreateFields):
     display_name: str = Field(min_length=1, max_length=150)
     bio: str | None = None
     profile_photo_url: str | None = Field(default=None, max_length=500)
+
+
+class AdminTeacherLinkRequest(BaseModel):
+    user_id: UUID
+    display_name: str = Field(min_length=1, max_length=150)
+    bio: str | None = None
+    profile_photo_url: str | None = Field(default=None, max_length=500)
+    is_active: bool = True
+
+
+class AdminTeacherLinkRead(BaseModel):
+    user: UserRead
+    teacher: TeacherRead
+    profile_already_existed: bool
+
+
+class AdminUserLookupRead(BaseModel):
+    user: UserRead
+    teacher_id: UUID | None
 
 
 class AdminStudentCreate(AdminUserCreateFields):
