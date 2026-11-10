@@ -31,6 +31,7 @@ from app.modules.admin.schemas import (
     AdminTeacherSortBy,
     SortOrder,
 )
+from app.modules.auth.dependencies import CurrentUser
 from app.modules.batch_groups.schemas import (
     StudentBatchMembershipRead,
 )
@@ -41,9 +42,17 @@ from app.modules.read_models.services import (
 )
 from app.modules.students.schemas import StudentProgramChangeRead, StudentProgramSwitch
 from app.modules.teachers.schemas import TeacherUpdate
-from app.modules.users.schemas import UserRead, UserUpdate
+from app.modules.users.schemas import UserRead, UserRolesUpdate, UserUpdate
+from app.modules.users.service import UserService
 
 router = APIRouter()
+
+
+@router.put("/users/{user_id}/roles", response_model=UserRead)
+async def set_user_roles(
+    user_id: UUID, body: UserRolesUpdate, session: DBSession, actor: CurrentUser
+) -> UserRead:
+    return await UserService(session).set_roles(user_id, body.roles, actor.id)
 
 
 @router.get("/students", response_model=Page[AdminStudentRead])

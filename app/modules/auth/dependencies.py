@@ -43,7 +43,7 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
 
 def require_roles(*roles: UserRole):
     async def guard(user: CurrentUser) -> User:
-        if user.role not in roles:
+        if not set(user.roles).intersection(roles):
             raise HTTPException(status_code=403, detail="Insufficient permissions")
         return user
 
@@ -51,7 +51,7 @@ def require_roles(*roles: UserRole):
 
 
 async def get_current_teacher(user: CurrentUser, session: DBSession) -> Teacher:
-    if user.role != UserRole.TEACHER:
+    if UserRole.TEACHER not in user.roles:
         raise HTTPException(status_code=403, detail="Teacher role required")
     teacher = await session.scalar(select(Teacher).where(Teacher.user_id == user.id))
     if teacher is None or not teacher.is_active:
@@ -60,7 +60,7 @@ async def get_current_teacher(user: CurrentUser, session: DBSession) -> Teacher:
 
 
 async def get_current_student(user: CurrentUser, session: DBSession) -> Student:
-    if user.role != UserRole.STUDENT:
+    if UserRole.STUDENT not in user.roles:
         raise HTTPException(status_code=403, detail="Student role required")
     student = await session.scalar(select(Student).where(Student.user_id == user.id))
     if student is None:

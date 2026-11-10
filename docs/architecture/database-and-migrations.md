@@ -64,7 +64,7 @@ Migration files should be committed to git.
 Current migration chain:
 
 ```txt
-20260719_0001 -> 20260719_0002 -> 20260719_0003 -> 20260719_0004 -> 20260719_0005 -> 20260719_0006 -> 20260719_0007 -> 20260719_0008 -> 20260720_0009 -> 20260720_0010 -> 20260721_0011 -> 20260721_0012 -> 20260721_0013 -> 20260721_0014 -> 20260722_0015 -> 20260722_0016 -> 20260723_0017 -> 20260724_0018 -> 20260725_0019 -> 20260725_0020 -> 20260725_0021 -> 20260726_0022 -> 20260726_0023 -> 20260726_0024 -> 20260726_0025 -> 20260726_0026 -> 20260727_0027 -> 20260727_0028 -> 20260729_0029
+20260719_0001 -> 20260719_0002 -> 20260719_0003 -> 20260719_0004 -> 20260719_0005 -> 20260719_0006 -> 20260719_0007 -> 20260719_0008 -> 20260720_0009 -> 20260720_0010 -> 20260721_0011 -> 20260721_0012 -> 20260721_0013 -> 20260721_0014 -> 20260722_0015 -> 20260722_0016 -> 20260723_0017 -> 20260724_0018 -> 20260725_0019 -> 20260725_0020 -> 20260725_0021 -> 20260726_0022 -> 20260726_0023 -> 20260726_0024 -> 20260726_0025 -> 20260726_0026 -> 20260727_0027 -> 20260727_0028 -> 20260729_0029 -> 20261110_0030
 ```
 
 `20260726_0025_add_email_password_auth.py` adds nullable Argon2 password hashes and a reserved
@@ -88,6 +88,11 @@ once per minute, while the outbox processor can be run continuously or at a shor
 record. Notify-Hub returns this rendered-event context in its in-app webhook; clients must use the
 raw ISO `starts_at` and `ends_at` values to format class times in the viewer's browser timezone,
 rather than parsing the notification body.
+
+`20261110_0030_add_additional_user_role.py` adds a nullable complementary admin/teacher role and
+a database check. Existing primary roles and identities remain untouched. Apply the migration
+before starting the new application version. Downgrade refuses while any additional roles exist;
+remove them explicitly first to avoid silently losing permissions.
 
 Useful commands:
 

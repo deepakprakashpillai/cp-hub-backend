@@ -106,7 +106,7 @@ Last updated: 2026-07-29
 ## Current Migration Head
 
 ```txt
-20260729_0029
+20261110_0030
 ```
 
 Migrations:
@@ -140,6 +140,7 @@ Migrations:
 - `20260727_0027_add_teacher_class_cancellation_event.py`
 - `20260727_0028_create_notifications.py`
 - `20260729_0029_add_notification_metadata.py`
+- `20261110_0030_add_additional_user_role.py`
 
 ## Current Commands
 

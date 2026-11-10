@@ -9,8 +9,8 @@ import app.db.models as _models  # noqa: F401, E402
 from app.db.base import Base
 from app.main import app
 
-OPENAPI_SHA256 = "17020ee9e1c70500ac12535f1677cbc4bbb6751cc24934ae91c3ac631d91b267"
-METADATA_SHA256 = "73a2438622777b882a768d621a744a45207424255f3bf8bcdc34ff7e72f9dddb"
+OPENAPI_SHA256 = "b9ce7b68ac3e67867806671a348ad5fc071449a11919ce79721afd9319c217a3"
+METADATA_SHA256 = "aad184fa2a1ea4ab07da95988b14abdb1136a1fd9e6db508a453d59eeece9ed9"
 ALEMBIC_HEAD = "20260729_0029"
 
 

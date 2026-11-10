@@ -26,8 +26,13 @@ class UserUpdate(BaseModel):
 
 
 class UserRead(UserBase):
+    roles: list[UserRole]
     id: UUID
     created_at: datetime
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class UserRolesUpdate(BaseModel):
+    roles: list[UserRole] = Field(min_length=1, max_length=2)

@@ -43,6 +43,7 @@ async def auth_user_read(session: DBSession, user: User) -> AuthUserRead:
         full_name=user.full_name,
         email=user.email,
         role=user.role,
+        roles=user.roles,
         teacher_id=teacher_id,
         student_id=student_id,
     )

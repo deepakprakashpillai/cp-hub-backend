@@ -33,7 +33,7 @@ class TeacherService:
         if user is None:
             raise NotFoundError("User not found")
 
-        if user.role != UserRole.TEACHER:
+        if UserRole.TEACHER not in user.roles:
             raise ConflictError("Teacher profile can only be created for a teacher user")
 
         existing_teacher = await self.session.scalar(

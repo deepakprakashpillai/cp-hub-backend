@@ -35,7 +35,7 @@ class StudentService:
         if user is None:
             raise NotFoundError("User not found")
 
-        if user.role != UserRole.STUDENT:
+        if UserRole.STUDENT not in user.roles:
             raise ConflictError("Student profile can only be created for a student user")
 
         existing_student = await self.session.scalar(

@@ -8,6 +8,7 @@ from app.core.pagination import Page, PaginationParams, paginate_scalars
 from app.modules.notifications.service import NotificationService
 from app.modules.users.models import User
 from app.modules.users.schemas import UserCreate, UserUpdate
+from app.shared.enums import UserRole
 
 
 class UserService:
@@ -25,6 +26,25 @@ class UserService:
         user = await self.session.get(User, user_id)
         if user is None:
             raise NotFoundError("User not found")
+        return user
+
+    async def set_roles(self, user_id: UUID, roles: list[UserRole], actor_id: UUID) -> User:
+        requested = set(roles)
+        allowed = {UserRole.ADMIN, UserRole.TEACHER}
+        if len(requested) != len(roles) or not requested or not requested <= allowed:
+            raise BadRequestError("Roles must be distinct admin and/or teacher roles")
+        user = await self.session.scalar(select(User).where(User.id == user_id).with_for_update())
+        if user is None:
+            raise NotFoundError("User not found")
+        if user.role not in allowed:
+            raise ConflictError("Only admin and teacher accounts can have their roles changed")
+        if user.id == actor_id and UserRole.ADMIN not in requested:
+            raise ConflictError("An admin cannot remove their own admin access")
+        if user.role not in requested:
+            user.role = next(iter(requested))
+        user.additional_role = next(iter(requested - {user.role}), None)
+        await self.session.commit()
+        await self.session.refresh(user)
         return user
 
     async def create_user(self, user_in: UserCreate, *, commit: bool = True) -> User:

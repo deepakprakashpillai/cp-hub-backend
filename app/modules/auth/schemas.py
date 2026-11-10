@@ -25,6 +25,7 @@ class AuthUserRead(BaseModel):
     full_name: str
     email: EmailStr
     role: UserRole
+    roles: list[UserRole]
     teacher_id: UUID | None = None
     student_id: UUID | None = None
 

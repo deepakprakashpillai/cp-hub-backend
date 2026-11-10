@@ -1,5 +1,9 @@
 # Teacher Domain
 
+An existing admin account can be granted the teacher role and linked to a teacher profile without
+creating another user. Teacher portal access still requires the role and an active profile and is
+scoped to that profile. See [Users](users.md) for the role and profile-linking API.
+
 ## Purpose
 
 The teacher domain manages teacher profiles, recurring availability rules, manual bookable slots, blocked time, and generated bookable slots.

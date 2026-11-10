@@ -69,7 +69,10 @@ class NotificationService:
         recipients = set(recipient_user_ids)
         if include_admins:
             admins = await self.session.scalars(
-                select(User.id).where(User.role == UserRole.ADMIN, User.is_active.is_(True))
+                select(User.id).where(
+                    (User.role == UserRole.ADMIN) | (User.additional_role == UserRole.ADMIN),
+                    User.is_active.is_(True),
+                )
             )
             recipients.update(admins)
             recipients.discard(actor_user_id)
@@ -112,7 +115,10 @@ class NotificationService:
         resolved = {key: set(user_ids) for key, user_ids in audiences.items()}
         if include_admins:
             admins = await self.session.scalars(
-                select(User.id).where(User.role == UserRole.ADMIN, User.is_active.is_(True))
+                select(User.id).where(
+                    (User.role == UserRole.ADMIN) | (User.additional_role == UserRole.ADMIN),
+                    User.is_active.is_(True),
+                )
             )
             resolved.setdefault("admin", set()).update(admins)
             resolved["admin"].discard(actor_user_id)

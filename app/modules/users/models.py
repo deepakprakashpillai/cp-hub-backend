@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Enum, Index, String, true
+from sqlalchemy import Boolean, CheckConstraint, Enum, Index, String, true
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -8,6 +8,12 @@ from app.shared.enums import UserRole, enum_values
 class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "users"
     __table_args__ = (
+        CheckConstraint(
+            "additional_role IS NULL OR "
+            "(role = 'admin' AND additional_role = 'teacher') OR "
+            "(role = 'teacher' AND additional_role = 'admin')",
+            name="ck_users_additional_role",
+        ),
         Index(
             "ix_users_full_name_trgm",
             "full_name",
@@ -35,6 +41,15 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Enum(UserRole, name="user_role", values_callable=enum_values, validate_strings=True),
         nullable=False,
     )
+    additional_role: Mapped[UserRole | None] = mapped_column(
+        Enum(UserRole, name="user_role", values_callable=enum_values, validate_strings=True),
+        nullable=True,
+    )
+
+    @property
+    def roles(self) -> list[UserRole]:
+        return [self.role, *([self.additional_role] if self.additional_role else [])]
+
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
